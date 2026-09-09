@@ -1,0 +1,8 @@
+.tools/
+.venv/
+build/
+dist/
+__pycache__/
+*.log
+*.7z
+aqtinstall.log

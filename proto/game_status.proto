@@ -1,0 +1,16 @@
+syntax = "proto3";
+package rm;
+
+// 对应 RM2026 V2.0.0 第 2.2.3 节；字段编号和 presence 必须保持协议一致。
+message GameStatus {
+  optional uint32 current_round = 1;
+  optional uint32 total_rounds = 2;
+  optional uint32 red_score = 3;
+  optional uint32 blue_score = 4;
+  optional uint32 current_stage = 5;
+  optional int32 stage_countdown_sec = 6;
+  optional int32 stage_elapsed_sec = 7;
+  optional bool is_paused = 8;
+  optional uint32 game_result = 9;
+  optional uint32 end_reason = 10;
+}
