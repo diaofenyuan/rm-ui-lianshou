@@ -15,14 +15,23 @@ void StatusReceiver::stop() {
     QCoreApplication::removePostedEvents(this, QEvent::MetaCall);
     emit stateChanged("未连接", false);
 }
-void StatusReceiver::start(const QString &host, int port, const QString &id) {
+bool StatusReceiver::start(const QString &host, int port, const QString &id) {
     stop();
-    const auto uri = QString("tcp://%1:%2").arg(host).arg(port).toUtf8();
+    receivedMessages = malformedMessages = 0; lastPayloadBytes = 0; lastQos = -1;
+    QString endpoint = host.trimmed();
+    // MQTT URI 中 IPv6 字面量必须加方括号；主机名和 IPv4 保持原样。
+    if (endpoint.contains(':') && !endpoint.startsWith('[')) endpoint = '[' + endpoint + ']';
+    const auto uri = QString("tcp://%1:%2").arg(endpoint).arg(port).toUtf8();
     const auto bytes = id.toUtf8();
     const int rc = MQTTAsync_create(&client, uri.constData(), bytes.constData(), MQTTCLIENT_PERSISTENCE_NONE, nullptr);
-    if (rc != MQTTASYNC_SUCCESS) { emit stateChanged(QString("创建 MQTT 失败：%1").arg(rc), false); return; }
-    MQTTAsync_setCallbacks(client, this, lost, message, nullptr);
+    if (rc != MQTTASYNC_SUCCESS) { emit stateChanged(QString("创建 MQTT 失败：%1").arg(rc), false); return false; }
+    const int callbackRc = MQTTAsync_setCallbacks(client, this, lost, message, nullptr);
+    if (callbackRc != MQTTASYNC_SUCCESS) {
+        emit stateChanged(QString("注册 MQTT 回调失败：%1").arg(callbackRc), false);
+        MQTTAsync_destroy(&client); return false;
+    }
     connectBroker();
+    return true;
 }
 void StatusReceiver::connectBroker() {
     if (!client) return;
@@ -64,13 +73,22 @@ void StatusReceiver::lost(void *ctx, char *) {
 }
 int StatusReceiver::message(void *ctx, char *topic, int topicLen, MQTTAsync_message *msg) {
     auto *s = static_cast<StatusReceiver *>(ctx);
-    const QByteArray name = topicLen ? QByteArray(topic, topicLen) : QByteArray(topic);
-    if (name == "GameStatus") {
+    const QByteArray name = topicLen ? QByteArray(topic, topicLen) : QByteArray(topic ? topic : "");
+    const int payloadBytes = msg ? msg->payloadlen : -1;
+    const int qos = msg ? msg->qos : -1;
+    if (name == "GameStatus" && msg) {
         rm::GameStatus value;
         const bool valid = msg->payloadlen >= 0 && msg->payloadlen <= 65536 && value.ParseFromArray(msg->payload, msg->payloadlen);
-        if (valid) QMetaObject::invokeMethod(s, [s, value] { emit s->received(value); }, Qt::QueuedConnection);
-        else QMetaObject::invokeMethod(s, [s] { emit s->stateChanged("已丢弃损坏的 Protobuf 消息", true); }, Qt::QueuedConnection);
+        if (valid) QMetaObject::invokeMethod(s, [s, value, payloadBytes, qos] {
+            ++s->receivedMessages; s->lastPayloadBytes = payloadBytes; s->lastQos = qos;
+            emit s->received(value); emit s->receivedInfo(value, payloadBytes, qos);
+        }, Qt::QueuedConnection);
+        else QMetaObject::invokeMethod(s, [s] {
+            ++s->malformedMessages;
+            emit s->stateChanged(QString("已丢弃损坏的 Protobuf 消息（累计 %1 条）").arg(s->malformedMessages), true);
+        }, Qt::QueuedConnection);
     }
-    MQTTAsync_freeMessage(&msg); MQTTAsync_free(topic);
+    if (msg) MQTTAsync_freeMessage(&msg);
+    if (topic) MQTTAsync_free(topic);
     return 1;
 }

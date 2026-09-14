@@ -8,12 +8,15 @@
 int main(int argc,char **argv) {
     QApplication app(argc,argv); app.setApplicationName("rm_client");
     QCommandLineParser p;p.addHelpOption();
-    p.addOptions({{"connect","启动后连接当前配置"},{"ffmpeg","FFmpeg 可执行文件","path","ffmpeg"},
+    p.addOptions({{"connect","启动后连接当前配置"},{"robot-id","机器人编号：红方 1–9，蓝方 101–109","id","3"},{"ffmpeg","FFmpeg 可执行文件","path","ffmpeg"},
         {"smoke-seconds","运行指定秒数后检查接收状态并退出","seconds","0"},{"screenshot","保存程序窗口截图","path"},{"metrics","保存接收统计 JSON","path"},{"ui-checks","验证叠加、折叠面板、表单及全屏"},{"ui-evidence","界面检查截图的路径前缀，需同时使用 --ui-checks","prefix"}});
     p.process(app);
     QString ffmpeg=p.value("ffmpeg");
     if(!p.isSet("ffmpeg") && QFile::exists(QCoreApplication::applicationDirPath()+"/ffmpeg.exe"))ffmpeg=QCoreApplication::applicationDirPath()+"/ffmpeg.exe";
-    MainWindow window(ffmpeg);window.show();
+    MainWindow window(ffmpeg);
+    bool validId = false; const int robotId = p.value("robot-id").toInt(&validId);
+    if (!validId || !window.selectRobot(robotId)) p.showHelp(1);
+    window.show();
     if(p.isSet("connect"))QTimer::singleShot(0,&window,&MainWindow::startConnection);
     bool uiOkay=true;
     if(p.isSet("ui-checks"))QTimer::singleShot(3000,&window,[&]{uiOkay=window.runUiChecks(p.value("ui-evidence"));});

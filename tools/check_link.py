@@ -42,9 +42,13 @@ def check():
         assert cli.returncode == 0, cli.stderr
         rows = [json.loads(line) for line in cli.stdout.splitlines() if line.startswith("{")]
         assert len(rows) == 5 and all(row["current_round"] == 2 and row["current_stage"] == 4 for row in rows)
+        assert all(row["message_type"] == "GameStatus" and row["current_stage_name"] == "比赛中"
+                   and row["game_result_name"] is None and row["end_reason_name"] is None
+                   and not row["warnings"] for row in rows)
         (ROOT / "build" / "integration-plus1.json").write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding="utf-8")
         with open("build/integration-client.log", "w", encoding="utf-8") as log:
-            client = subprocess.Popen(["dist/rm_client.exe", "--connect", "--ffmpeg", FFMPEG, "--ui-checks",
+            client = subprocess.Popen(["dist/rm_client.exe", "--connect", "--robot-id", "104", "--ffmpeg", FFMPEG, "--ui-checks",
+                "--ui-evidence", "build/operator",
                 "--smoke-seconds", "20", "--screenshot", "build/preview.png", "--metrics", "build/integration-metrics.json"],
                 stdout=log, stderr=subprocess.STDOUT, creationflags=FLAGS)
             time.sleep(5)
@@ -55,6 +59,7 @@ def check():
         metrics=json.loads(Path("build/integration-metrics.json").read_text(encoding="utf-8"))
         assert code == 0, metrics
         assert metrics["ui_checks_passed"] and metrics["decoded_frames"] > 30
+        assert metrics["robot_id"] == metrics["selected_robot_id"] == 104
         print(json.dumps({"plus1_messages":len(rows),"broker_restart_recovered":True,"reordered_packets":True,
                           "drop_every_frames":17,"plus2":metrics},ensure_ascii=False,indent=2))
     finally:

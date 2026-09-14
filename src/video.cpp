@@ -23,6 +23,7 @@ void VideoReceiver::stop() {
 bool VideoReceiver::start(const QString &address, quint16 port, const QString &ffmpeg) {
     stop();
     packets = decoded = 0; assembler.invalid = assembler.dropped = 0;
+    assembler.zeroBasedFrames = assembler.oneBasedFrames = 0;
     const QHostAddress bind(address);
     if (bind.isNull() || !socket.bind(bind, port, QUdpSocket::DontShareAddress)) {
         emit problem("UDP 绑定失败，请检查本机地址及端口占用：" + socket.errorString()); return false;

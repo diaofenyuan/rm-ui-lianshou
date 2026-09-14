@@ -36,9 +36,9 @@ def video_frames(ffmpeg, video_path):
     return [data[a:b] for a, b in zip(starts, starts[1:] + [len(data)])]
 
 
-def game_status(elapsed):
+def game_status(elapsed, rate=1.0):
     # 缩短准备和比赛时长以便观察所有阶段；这些时长仅用于演示。
-    t = int(elapsed) % 70
+    t = int(elapsed * rate) % 70
     stage, countdown, spent, paused = 0, 0, 0, False
     if 2 <= t < 7: stage, countdown, spent = 1, 7-t, t-2
     elif 7 <= t < 10: stage, countdown, spent = 2, 10-t, t-7
@@ -56,7 +56,7 @@ def game_status(elapsed):
 
 async def run(args):
     frames = await asyncio.to_thread(video_frames, args.ffmpeg, ROOT / ".tools" / "demo.hevc")
-    broker = Broker({"listeners": {"default": {"type": "tcp", "bind": f"127.0.0.1:{args.port}"}},
+    broker = Broker({"listeners": {"default": {"type": "tcp", "bind": f"{args.bind}:{args.port}"}},
                      "plugins": {"amqtt.plugins.authentication.AnonymousAuthPlugin": {"allow_anonymous": True}}})
     await broker.start()
     publisher = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="rm-local-simulator")
@@ -64,12 +64,14 @@ async def run(args):
     publisher.loop_start()
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     started = time.monotonic()
-    print(f"SIMULATOR READY: MQTT 127.0.0.1:{args.port}; UDP 127.0.0.1:{args.udp_port}", flush=True)
+    print(f"SIMULATOR READY: MQTT {args.bind}:{args.port}; UDP {args.udp_destination}:{args.udp_port}; "
+          f"slice-base={args.slice_base}; status-rate={args.status_rate}", flush=True)
 
     async def telemetry():
         while True:
             if publisher.is_connected():
-                publisher.publish("GameStatus", game_status(time.monotonic()-started+args.offset).SerializeToString(), qos=1)
+                publisher.publish("GameStatus", game_status(time.monotonic()-started+args.offset,
+                    args.status_rate).SerializeToString(), qos=1)
             await asyncio.sleep(0.2)
 
     async def video():
@@ -77,12 +79,12 @@ async def run(args):
         deadline = time.monotonic()
         while True:
             data = frames[frame_id % len(frames)]
-            chunks = [struct.pack(">HHI", frame_id % 65536, i//1392, len(data)) + data[i:i+1392]
+            chunks = [struct.pack(">HHI", frame_id % 65536, i//1392 + args.slice_base, len(data)) + data[i:i+1392]
                       for i in range(0, len(data), 1392)]
             if args.reorder: chunks.reverse()
             for i, chunk in enumerate(chunks):
                 if args.drop_every and frame_id % args.drop_every == 0 and i == 0: continue
-                udp.sendto(chunk, ("127.0.0.1", args.udp_port))
+                udp.sendto(chunk, (args.udp_destination, args.udp_port))
             frame_id += 1
             deadline += 1/30
             await asyncio.sleep(max(0, deadline-time.monotonic()))
@@ -107,10 +109,17 @@ if __name__ == "__main__":
     p.add_argument("--ffmpeg", default="ffmpeg")
     p.add_argument("--port", type=int, default=3333)
     p.add_argument("--udp-port", type=int, default=3334)
+    p.add_argument("--bind", default="127.0.0.1", help="MQTT 监听地址；默认只监听本机回环")
+    p.add_argument("--udp-destination", default="127.0.0.1", help="图传 UDP 目的地址")
     p.add_argument("--seconds", type=int, default=0)
-    p.add_argument("--offset", type=int, default=15)
+    p.add_argument("--offset", type=float, default=15)
+    p.add_argument("--status-rate", type=float, default=1.0, help="状态时间倍率，测试全阶段时可加速")
+    p.add_argument("--slice-base", type=int, choices=(0, 1), default=0, help="UDP 分片编号从 0 或 1 开始")
     p.add_argument("--reorder", action="store_true")
     p.add_argument("--drop-every", type=int, default=0)
     logging.basicConfig(level=logging.ERROR)
     with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(run(p.parse_args()))
+        parsed = p.parse_args()
+        if parsed.status_rate <= 0: p.error("--status-rate 必须大于 0")
+        if parsed.slice_base not in (0, 1): p.error("--slice-base 只能为 0 或 1")
+        asyncio.run(run(parsed))

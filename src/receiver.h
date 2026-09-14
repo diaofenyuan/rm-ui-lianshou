@@ -9,10 +9,17 @@ class StatusReceiver : public QObject {
 public:
     explicit StatusReceiver(QObject *parent = nullptr);
     ~StatusReceiver();
-    void start(const QString &host, int port, const QString &robotId);
+    // 返回值只表示本地 MQTT 客户端是否创建成功；网络连接仍通过 stateChanged 异步报告。
+    bool start(const QString &host, int port, const QString &robotId);
     void stop();
+    quint64 receivedMessages = 0;
+    quint64 malformedMessages = 0;
+    int lastPayloadBytes = 0;
+    int lastQos = -1;
 signals:
     void received(rm::GameStatus status);
+    // 在保留 received 兼容性的同时提供审计元数据，便于独立接收器落盘和排障。
+    void receivedInfo(rm::GameStatus status, int payloadBytes, int qos);
     void stateChanged(QString text, bool subscribed);
 private:
     MQTTAsync client = nullptr;

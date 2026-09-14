@@ -1,4 +1,4 @@
-# RoboMaster 裁判系统自定义客户端
+# RoboMaster 单兵自定义客户端
 
 C++17 / Qt 6 桌面程序，实现训练任务的 PLUS1 和 PLUS2。协议基线为 **RM2026 通信协议 V2.0.0（2026-06-26）**。面向 Windows x64，当前先通过本机模拟验证，尚未连接裁判系统硬件。
 
@@ -6,9 +6,15 @@ C++17 / Qt 6 桌面程序，实现训练任务的 PLUS1 和 PLUS2。协议基线
 
 双击项目根目录的 **`start-demo.cmd`**。它会启动本地 MQTT Broker、比赛信息发布器、UDP HEVC 发送器和客户端。关闭客户端窗口会同时停止本次模拟端。已有模拟程序占用 3333 时，启动脚本会提示，不会强行关闭其他进程。
 
-只打开界面：`dist/rm_client.exe`。实机使用时，在界面中选择“连接实机”，按[搭建资料](docs/research-and-setup.md)配置网络和机器人 ID，再点击连接。
+只打开界面：`dist/rm_client.exe`。先选择红方 / 蓝方与兵种编号，再点击“连接所选机器人”。实机使用时选择“连接实机”，展开“连接参数”，按[搭建资料](docs/research-and-setup.md)配置网络，并先确认官方选手端登录的是同一机器人。
 
-界面以白色为主，左侧监看图传和比分，右侧查看两条链路的接收状态。端口、监听 IP 和 FFmpeg 路径收在“高级连接参数”中；底部“接收日志”可展开，分别查看比赛 JSON 与运行事件，支持暂停滚动和复制。暂停滚动不会停止接收。“距最近更新”表示数据的接收时间间隔，不是网络延迟。
+界面以白色为主，比赛概览独立显示在主视角上方，关闭画内叠加后仍能查看比分、阶段、倒计时和结算结果。右侧选择操作位、配置连接并查看两条链路状态。F10 切换专注模式，隐藏配置、接收统计和日志，保留当前操作位与链路异常提示；F11 切换全屏，Esc 先退出全屏，再退出专注模式。
+
+兵种编号按官方协议附录二：1 号英雄、2 号工程、3/4/5 号步兵、6 号空中、7 号哨兵、8 号飞镖、9 号雷达；蓝方机器人 ID 在编号上加 100。MQTT 使用该机器人 ID。连接期间修改选择不会立即切换，点击“应用兵种并重连”后才生效；切换时清除旧比分和图传。选择兵种不会遥控官方选手端切换图传，也不表示所有操作位均已有专属功能。当前接入的是全局 `GameStatus` 和官方转发的主图传，单兵血量、热量、弹量及机器人控制指令尚未接入。
+
+底部“接收日志”可展开，分别查看比赛 JSON 和比赛动态 / 运行事件，支持暂停滚动和复制。比赛动态只记录连续消息中已确认的阶段、暂停、比分和结算变化；重复消息和正常倒计时更新不会刷屏。暂停滚动不会停止接收。“距最近更新”表示数据的接收时间间隔，不是网络延迟。
+
+也可指定初始操作位，例如蓝方 4 号步兵：`dist/rm_client.exe --robot-id 104`。本地模拟器发布同一组全局比赛信息与测试图，不模拟不同兵种的独立图传。
 
 PLUS1 独立接收程序：
 
@@ -21,6 +27,8 @@ PLUS1 独立接收程序：
 ```
 
 标准输出每行一条 JSON，包含十个协议字段及接收时间；连接日志写入标准错误。`--count` / `--timeout` 便于自动检查。不指定条数时持续输出。
+
+PLUS1 的字段、链路、实机接入顺序和验收标准见 [GameStatus 接收说明](docs/plus1-game-status.md)。只验证 PLUS1 可运行 `.\.venv\Scripts\python.exe -X utf8 tools\check_plus1.py`。
 
 ## 功能与边界
 
@@ -57,7 +65,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Setup -Pack
 .\.venv\Scripts\python.exe -X utf8 tools\check_link.py
 ```
 
-此检查运行已经打包的 EXE，验证 PLUS1 输出、PLUS2 实际解码、叠加开关、全屏切换，以及模拟服务器停止 3 秒后重新启动的恢复情况；图传同时注入乱序和每 17 帧丢失一个分片。结果留在 `build/integration-metrics.json`，程序窗口截图为 `build/preview.png`。测试结果只代表本地模拟。
+此检查运行已经打包的 EXE，以蓝方 4 号步兵（ID 104）连接，验证 PLUS1 输出、PLUS2 实际解码、18 个红蓝操作位的选择、待应用身份保持、专注模式、叠加与全屏，以及模拟服务器停止 3 秒后重新启动的恢复情况；图传同时注入乱序和每 17 帧丢失一个分片。结果留在 `build/integration-metrics.json`，程序窗口截图为 `build/preview.png`，专注与紧凑布局截图为 `build/operator-*.png`。测试结果只代表本地模拟。
 
 ## 代码入口
 
@@ -67,7 +75,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Setup -Pack
 | MQTT 接收与重连 | `src/receiver.cpp` |
 | 图传重组与解码 | `src/assembler.cpp`、`src/video.cpp` |
 | 中文界面及叠加 | `src/window.cpp` |
+| 兵种与机器人编号 | `src/operator_profile.h` |
 | 独立终端程序 | `src/receive_main.cpp` |
 | 模拟发送端 | `tools/simulator.py` |
 
 官方 PDF 保持原件，放在 `docs/references`。第三方库许可随运行目录存于 `dist/licenses`；对外分发二进制时应同时保留相应许可、来源及适用的源代码材料。
+
+界面的信息集中呈现、比赛事件去重和专注视图参考了复旦大学星云 EGA 战队的[开源介绍](https://bbs.robomaster.com/article/1943329)及 [RM26_Client](https://github.com/ClearWei/RM26_Client)；本项目保持现有 Qt Widgets 实现，未引入其代码或素材。

@@ -18,6 +18,9 @@ public:
     quint64 packets = 0;
     quint64 dropped() const { return assembler.dropped; }
     quint64 invalid() const { return assembler.invalid; }
+    quint64 zeroBasedFrames() const { return assembler.zeroBasedFrames; }
+    quint64 oneBasedFrames() const { return assembler.oneBasedFrames; }
+    int sliceBase() const { return assembler.lastSliceBase(); }
 signals:
     void frameReady(QImage frame);
     void problem(QString message);
