@@ -1,5 +1,7 @@
 #pragma once
+#include "match_state.h"
 #include "receiver.h"
+#include "ui/console_page.h"
 #include "video.h"
 #include <QCheckBox>
 #include <QComboBox>
@@ -10,6 +12,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
+#include <QStackedWidget>
 #include <QTabWidget>
 #include <QToolButton>
 #include <QVector>
@@ -39,6 +42,7 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QString ffmpeg);
     void startConnection();
+    void switchView();
     bool selectRobot(int id);
     bool saveEvidence(const QString &path);
     bool runUiChecks(const QString &evidencePrefix = {});
@@ -46,6 +50,7 @@ public:
 private:
     StatusReceiver receiver;
     VideoReceiver video;
+    MatchState match;
     QElapsedTimer clock;
     qint64 lastData = -1, lastFrame = -1, fpsSampleAt = 0;
     quint64 messages = 0, fpsSampleFrames = 0;
@@ -65,6 +70,9 @@ private:
     QVector<QLabel *> statusValues;
     QWidget *advanced, *logBody, *diagnostics, *logPanel, *statusPanel;
     QScrollArea *sidebar;
+    QStackedWidget *pages;
+    ConsolePage *consolePage;
+    QPushButton *viewButton;
     QTabWidget *logTabs;
     QPlainTextEdit *log, *eventLog;
     VideoCanvas *canvas;

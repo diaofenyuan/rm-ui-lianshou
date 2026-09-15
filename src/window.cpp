@@ -227,11 +227,17 @@ MainWindow::MainWindow(QString ffmpeg) {
     auto *titles = new QVBoxLayout; titles->setSpacing(3); header->addLayout(titles);
     titles->addWidget(label("RoboMaster 单兵客户端", "title"));
     operatorIdentity = label("红方 · 3 号步兵 / 待连接", "muted"); titles->addWidget(operatorIdentity);
-    header->addStretch(); sourceBadge = label("本地模拟", "badge"); header->addWidget(sourceBadge, 0, Qt::AlignVCenter);
+    header->addStretch();
+    viewButton = new QPushButton("单兵视角  Ctrl+Tab");
+    viewButton->setToolTip("在总控台与单兵视角之间切换");
+    header->addWidget(viewButton, 0, Qt::AlignVCenter);
+    sourceBadge = label("本地模拟", "badge"); header->addWidget(sourceBadge, 0, Qt::AlignVCenter);
     header->addWidget(label("RM2026 · V2.0.0", "muted"));
 
     auto *body = new QHBoxLayout; body->setSpacing(16); layout->addLayout(body, 1);
-    auto *viewer = panel(); body->addWidget(viewer, 1);
+    pages = new QStackedWidget; body->addWidget(pages, 1);
+    consolePage = new ConsolePage(&match); pages->addWidget(consolePage);
+    auto *viewer = panel(); pages->addWidget(viewer);
     auto *viewLayout = new QVBoxLayout(viewer); viewLayout->setContentsMargins(16, 14, 16, 16); viewLayout->setSpacing(10);
     auto *viewHeader = new QHBoxLayout; viewLayout->addLayout(viewHeader);
     viewHeader->addWidget(label("主视角", "section")); liveBadge = label("等待画面", "badge"); viewHeader->addWidget(liveBadge, 0, Qt::AlignVCenter); viewHeader->addStretch();
@@ -310,15 +316,18 @@ MainWindow::MainWindow(QString ffmpeg) {
     statusBadge = label("未接收", "badge"); statusHeader->addWidget(statusBadge, 0, Qt::AlignVCenter); statusHeader->addStretch();
     statusMeta = label("协议 RM2026-V2.0.0 · 已提供 0 / 10 字段", "muted");
     statusMeta->setWordWrap(true); statusLayout->addWidget(statusMeta);
-    auto *statusGrid = new QGridLayout; statusGrid->setHorizontalSpacing(10); statusGrid->setVerticalSpacing(5);
+    auto *statusGrid = new QGridLayout; statusGrid->setHorizontalSpacing(12); statusGrid->setVerticalSpacing(8);
     const QStringList statusCaptions = {"当前局号", "总局数", "红方得分", "蓝方得分", "当前阶段",
         "阶段倒计时", "阶段已过", "是否暂停", "当局胜者", "结束原因"};
     for (int i = 0; i < statusCaptions.size(); ++i) {
-        const int row = i / 2, col = (i % 2) * 2;
-        auto *caption = label(statusCaptions[i], "muted");
-        auto *value = label("未提供"); value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        value->setFont(theme::font(12, true)); value->setToolTip(statusCaptions[i] + "（原始 GameStatus 字段）");
-        statusGrid->addWidget(caption, row, col); statusGrid->addWidget(value, row, col + 1);
+        const int row = i / 2, col = i % 2;
+        // 字段名在上、值在下：值文本不参与最小宽度，长枚举不会把侧栏撑出视口。
+        auto *cell = new QVBoxLayout; cell->setSpacing(2);
+        auto *value = label("未提供");
+        value->setFont(theme::font(12, true)); value->setMinimumWidth(1);
+        value->setToolTip(statusCaptions[i] + "（原始 GameStatus 字段）");
+        cell->addWidget(label(statusCaptions[i], "muted")); cell->addWidget(value);
+        statusGrid->addLayout(cell, row, col);
         statusValues.append(value);
     }
     statusLayout->addLayout(statusGrid);
@@ -374,7 +383,7 @@ MainWindow::MainWindow(QString ffmpeg) {
     connect(robotRole, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::updateProfile);
     connect(connectButton, &QPushButton::clicked, this, &MainWindow::startConnection);
     connect(stopButton, &QPushButton::clicked, this, [this] {
-        active = false; receiver.stop(); video.stop(); mqttReady = false; lastData = lastFrame = -1;
+        active = false; receiver.stop(); video.stop(); mqttReady = false; lastData = lastFrame = -1; match.reset();
         stopButton->setEnabled(false); frameRate->setText("0 fps"); updateProfile(); refresh();
     });
     connect(overlay, &QCheckBox::toggled, this, [this](bool value) { canvas->overlay = value; canvas->update(); });
@@ -382,6 +391,7 @@ MainWindow::MainWindow(QString ffmpeg) {
         connection->setText(text); mqttReady = ready; addEvent(text); refresh();
     });
     connect(&receiver, &StatusReceiver::received, this, [this](const rm::GameStatus &value) {
+        match.applyGame(value);
         recordMatchChanges(value);
         for (const auto &issue : status::warnings(value)) addEvent("协议警告：" + issue);
         canvas->data = value; canvas->hasData = true; lastData = clock.elapsed(); ++messages;
@@ -400,11 +410,47 @@ MainWindow::MainWindow(QString ffmpeg) {
     connect(&video, &VideoReceiver::frameReady, this, [this](QImage frame) {
         canvas->image = frame; lastFrame = clock.elapsed(); canvas->videoStale = false; canvas->update();
     });
+    // 总控台数据域：全部进入 MatchState；慢速/触发式域同时落 JSON 日志，10Hz 动态域只进模型。
+    const auto appendDomain = [this](QJsonObject object) {
+        object["received_at"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+        appendLog(log, QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+    };
+    connect(&receiver, &StatusReceiver::receivedUnitStatus, this, [this, appendDomain](const rm::GlobalUnitStatus &value) {
+        match.applyUnitStatus(value); appendDomain(status::json(value));
+    });
+    connect(&receiver, &StatusReceiver::receivedLogistics, this, [this, appendDomain](const rm::GlobalLogisticsStatus &value) {
+        match.applyLogistics(value); appendDomain(status::json(value));
+    });
+    connect(&receiver, &StatusReceiver::receivedSpecialMechanism, &match, &MatchState::applySpecialMechanism);
+    connect(&receiver, &StatusReceiver::receivedEvent, this, [this, appendDomain](const rm::Event &value) {
+        match.applyEvent(value); addEvent(status::eventText(value)); appendDomain(status::json(value));
+    });
+    connect(&receiver, &StatusReceiver::receivedInjury, this, [this, appendDomain](const rm::RobotInjuryStat &value) {
+        match.applyInjury(value); appendDomain(status::json(value));
+    });
+    connect(&receiver, &StatusReceiver::receivedRespawn, this, [this, appendDomain](const rm::RobotRespawnStatus &value) {
+        match.applyRespawn(value); appendDomain(status::json(value));
+    });
+    connect(&receiver, &StatusReceiver::receivedStatic, this, [this, appendDomain](const rm::RobotStaticStatus &value) {
+        match.applyStatic(value); appendDomain(status::json(value));
+    });
+    connect(&receiver, &StatusReceiver::receivedDynamic, &match, &MatchState::applyDynamic);
+    connect(&receiver, &StatusReceiver::receivedModule, &match, &MatchState::applyModule);
+    connect(&receiver, &StatusReceiver::receivedPosition, &match, &MatchState::applyPosition);
+    connect(&receiver, &StatusReceiver::receivedBuff, &match, &MatchState::applyBuff);
+    connect(&receiver, &StatusReceiver::receivedPenalty, this, [this, appendDomain](const rm::PenaltyInfo &value) {
+        match.applyPenalty(value);
+        addEvent(QString("判罚：%1").arg(value.has_penalty_type() ? status::penaltyType(value.penalty_type()) : "未提供"));
+        appendDomain(status::json(value));
+    });
+    connect(&receiver, &StatusReceiver::receivedRadar, &match, &MatchState::applyRadar);
     connect(&video, &VideoReceiver::problem, this, &MainWindow::addEvent);
     connect(focusButton, &QPushButton::toggled, this, &MainWindow::setFocusMode);
     connect(new QShortcut(QKeySequence("F10"), this), &QShortcut::activated, this, [this] { setFocusMode(!focusMode); });
     connect(fullScreenButton, &QPushButton::clicked, this, &MainWindow::toggleFullScreen);
     connect(new QShortcut(QKeySequence("F11"), this), &QShortcut::activated, this, &MainWindow::toggleFullScreen);
+    connect(viewButton, &QPushButton::clicked, this, &MainWindow::switchView);
+    connect(new QShortcut(QKeySequence("Ctrl+Tab"), this), &QShortcut::activated, this, &MainWindow::switchView);
     connect(new QShortcut(QKeySequence("Esc"), this), &QShortcut::activated, this, [this] {
         if (isFullScreen()) toggleFullScreen(); else if (focusMode) setFocusMode(false);
     });
@@ -493,6 +539,13 @@ void MainWindow::refreshStatusDetails() {
     statusPanel->setAccessibleDescription(statusMeta->text() + (issues.isEmpty() ? "" : "；" + statusWarning->text()));
 }
 
+void MainWindow::switchView() {
+    const bool toConsole = pages->currentWidget() != consolePage;
+    pages->setCurrentIndex(toConsole ? 0 : 1);
+    // 按钮文案始终显示切换目标：当前是总控台时提示可切到单兵视角。
+    viewButton->setText(toConsole ? "单兵视角  Ctrl+Tab" : "总控台  Ctrl+Tab");
+}
+
 bool MainWindow::validateForm() {
     formError->hide();
     for (auto *input : {host, robotId, bindIp, ffmpegPath}) {
@@ -517,10 +570,12 @@ void MainWindow::startConnection() {
     // 参数错误不打断已有链路；先验证，再替换连接。
     if (!validateForm()) return;
     receiver.stop(); video.stop(); messages = 0; lastData = lastFrame = -1; mqttReady = false;
+    match.reset();
     fpsSampleAt = clock.elapsed(); fpsSampleFrames = 0; frameRate->setText("0 fps");
     canvas->data.Clear(); canvas->hasData = false; canvas->image = {}; canvas->setAccessibleDescription("等待比赛信息");
     matchSummary->setAccessibleDescription("等待比赛信息");
     canvas->simulation = mode->currentIndex() == 0; active = true; connectedRobotId = robotId->text().toInt();
+    consolePage->setRobot(connectedRobotId);
     updateProfile(); addEvent("连接操作位：" + canvas->operatorName);
     stopButton->setEnabled(true); lastUpdate->setText("最近接收 —");
     const bool mqttStarted = receiver.start(host->text().trimmed(), mqttPort->value(), robotId->text().trimmed());
@@ -590,7 +645,8 @@ QJsonObject MainWindow::metrics() const {
         {"mqtt_received", double(receiver.receivedMessages)}, {"mqtt_malformed", double(receiver.malformedMessages)},
         {"last_payload_bytes", receiver.lastPayloadBytes}, {"last_qos", receiver.lastQos},
         {"video_slice_base", video.sliceBase()}, {"video_zero_based_frames", double(video.zeroBasedFrames())},
-        {"video_one_based_frames", double(video.oneBasedFrames())}, {"status", status::json(canvas->data)}};
+        {"video_one_based_frames", double(video.oneBasedFrames())}, {"console_page", double(pages->currentIndex())},
+        {"status", status::json(canvas->data)}};
 }
 bool MainWindow::saveEvidence(const QString &path) { return grab().save(path); }
 bool MainWindow::runUiChecks(const QString &evidencePrefix) {
@@ -619,6 +675,16 @@ bool MainWindow::runUiChecks(const QString &evidencePrefix) {
         okay = statusValues[4]->text().contains("比赛") && statusMeta->text().contains("/ 10") && okay;
     }
     checkpoint(okay, "GameStatus 十字段面板");
+    const int originalPage = pages->currentIndex();
+    pages->setCurrentWidget(consolePage);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    okay = pages->currentWidget() == consolePage && consolePage->scoreBar()->isVisible()
+        && consolePage->allyList()->isVisible() && consolePage->enemyList()->isVisible()
+        && consolePage->allyList()->rowCount() == 5 && consolePage->enemyList()->rowCount() == 5 && okay;
+    if (!evidencePrefix.isEmpty()) okay = saveEvidence(evidencePrefix + "-console.png") && okay;
+    checkpoint(okay, "总控台页面");
+    pages->setCurrentIndex(1);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     const int normalWidth = canvas->width();
     setFocusMode(true); QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     okay = sidebar->isHidden() && logPanel->isHidden() && diagnostics->isHidden()
@@ -646,5 +712,6 @@ bool MainWindow::runUiChecks(const QString &evidencePrefix) {
     checkpoint(okay, "最小窗口布局");
     advancedToggle->setChecked(false); logToggle->setChecked(false);
     toggleFullScreen(); okay = isFullScreen() && okay; toggleFullScreen(); okay = !isFullScreen() && okay;
+    pages->setCurrentIndex(originalPage);
     resize(originalSize); return okay;
 }

@@ -18,16 +18,24 @@ FetchContent_MakeAvailable(protobuf paho)
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Network Test)
 set(CMAKE_AUTOMOC ON)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
-add_custom_command(OUTPUT generated/game_status.pb.cc generated/game_status.pb.h
+add_custom_command(OUTPUT
+    generated/game_status.pb.cc generated/game_status.pb.h
+    generated/rm_messages.pb.cc generated/rm_messages.pb.h
   COMMAND protobuf::protoc --cpp_out=${CMAKE_CURRENT_BINARY_DIR}/generated
-    --proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto ${CMAKE_CURRENT_SOURCE_DIR}/proto/game_status.proto
-  DEPENDS protobuf::protoc proto/game_status.proto VERBATIM)
-add_library(rm_core src/status.cpp src/assembler.cpp src/receiver.cpp src/video.cpp
-  src/status.h src/assembler.h src/receiver.h src/video.h generated/game_status.pb.cc)
+    --proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/proto/game_status.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/proto/rm_messages.proto
+  DEPENDS protobuf::protoc proto/game_status.proto proto/rm_messages.proto VERBATIM)
+add_library(rm_core src/status.cpp src/assembler.cpp src/receiver.cpp src/video.cpp src/match_state.cpp
+  src/status.h src/assembler.h src/receiver.h src/video.h src/match_state.h
+  generated/game_status.pb.cc generated/rm_messages.pb.cc)
 target_include_directories(rm_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(rm_core PUBLIC PAHO_MQTT_STATIC=1)
 target_link_libraries(rm_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network protobuf::libprotobuf paho-mqtt3a-static)
-add_executable(rm_client src/main.cpp src/window.cpp src/window.h)
+add_executable(rm_client src/main.cpp src/window.cpp src/window.h
+  src/ui/console_page.cpp src/ui/console_page.h
+  src/ui/score_bar.cpp src/ui/score_bar.h
+  src/ui/robot_list.cpp src/ui/robot_list.h src/ui/console_panel.h)
 target_link_libraries(rm_client PRIVATE rm_core Qt6::Widgets)
 add_executable(rm_receive src/receive_main.cpp)
 target_link_libraries(rm_receive PRIVATE rm_core)

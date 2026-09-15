@@ -1,4 +1,5 @@
 #include "assembler.h"
+#include "match_state.h"
 #include "status.h"
 #include "operator_profile.h"
 #include <QtTest>
@@ -121,6 +122,129 @@ private slots:
         QVERIFY(!a.push(packet(1,0,1402,"short"),0));QCOMPARE(a.invalid,5ULL);
         for(int i=0;i<20;++i)a.push(packet(i,0,1402,QByteArray(1392,'a')),0);
         QVERIFY(a.pending()<=8);
+    }
+    void consoleSemantics() {
+        QCOMPARE(status::robotType(1), QString("1号英雄"));
+        QCOMPARE(status::robotType(4), QString("4号步兵"));
+        QVERIFY(status::robotType(99).contains("99"));
+        QCOMPARE(status::connectionState(1), QString("已连接"));
+        QCOMPARE(status::fieldState(1), QString("未上场"));
+        QCOMPARE(status::aliveState(2), QString("战亡"));
+        QCOMPARE(status::baseStatus(2), QString("解除无敌，护甲展开"));
+        QCOMPARE(status::outpostStatus(5), QString("被击毁，重建中"));
+        QCOMPARE(status::penaltyType(4), QString("超功率"));
+        QCOMPARE(status::buffType(2), QString("防御增益/易伤"));
+        rm::Event kill; kill.set_event_id(1); kill.set_param("1,101");
+        QCOMPARE(status::eventText(kill), QString("击杀事件：红方 · 1 号英雄 被 蓝方 · 1 号英雄 击毁"));
+        rm::Event outpost; outpost.set_event_id(2); outpost.set_param("111");
+        QCOMPARE(status::eventText(outpost), QString("蓝方前哨站被摧毁"));
+        rm::Event dart; dart.set_event_id(9); dart.set_param("2,4");
+        QVERIFY(status::eventText(dart).contains("蓝方"));
+        QVERIFY(status::eventText(dart).contains("基地随机移动目标"));
+        rm::Event assemble; assemble.set_event_id(15); assemble.set_param("2");
+        QCOMPARE(status::eventText(assemble), QString("装配结果：装配超时"));
+        rm::Event unknown; unknown.set_event_id(99); unknown.set_param("x");
+        QVERIFY(status::eventText(unknown).contains("99"));
+    }
+    void consoleDomainJson() {
+        rm::GlobalUnitStatus u;
+        u.set_base_health(5000); u.set_base_status(1); u.set_outpost_status(3);
+        u.set_total_damage_ally(1200);
+        for (int i = 0; i < 10; ++i) u.add_robot_health(quint32(100 + i));
+        const auto o = status::json(u);
+        QCOMPARE(o["message_type"].toString(), QString("GlobalUnitStatus"));
+        QCOMPARE(o["base_status_name"].toString(), QString("解除无敌，护甲未展开"));
+        QCOMPARE(o["outpost_status_name"].toString(), QString("被击毁，不可重建"));
+        QCOMPARE(o["robot_health"].toArray().size(), 10);
+        QCOMPARE(o["total_damage_ally"].toInt(), 1200);
+        rm::GlobalUnitStatus empty;
+        QVERIFY(status::json(empty)["base_health"].isNull());
+        QVERIFY(status::json(empty)["enemy_base_status_name"].isNull());
+        rm::RobotStaticStatus st;
+        st.set_robot_id(104); st.set_robot_type(4); st.set_level(2); st.set_max_health(400);
+        st.set_heat_cooldown_rate(10.0f);
+        const auto so = status::json(st);
+        QCOMPARE(so["message_type"].toString(), QString("RobotStaticStatus"));
+        QCOMPARE(so["robot_type_name"].toString(), QString("4号步兵"));
+        QCOMPARE(so["level"].toInt(), 2);
+        QVERIFY(so["connection_state_name"].isNull());
+        rm::RobotDynamicStatus dy;
+        dy.set_current_health(300); dy.set_current_heat(55.5f); dy.set_remaining_ammo(600);
+        dy.set_is_out_of_combat(true);
+        const auto dyo = status::json(dy);
+        QCOMPARE(dyo["current_health"].toInt(), 300);
+        QCOMPARE(dyo["current_heat"].toDouble(), 55.5);
+        QCOMPARE(dyo["is_out_of_combat"].toBool(), true);
+        rm::RobotRespawnStatus rs;
+        rs.set_is_pending_respawn(true); rs.set_total_respawn_progress(33); rs.set_current_respawn_progress(12);
+        rs.set_gold_cost_for_respawn(440);
+        QCOMPARE(status::json(rs)["progress_text"].toString(), QString("12/33"));
+        rm::Event kill; kill.set_event_id(1); kill.set_param("1,101");
+        QCOMPARE(status::json(kill)["message_type"].toString(), QString("Event"));
+        QVERIFY(status::json(kill)["event_text"].toString().contains("击毁"));
+    }
+    void matchStateAggregates() {
+        MatchState m;
+        QVERIFY(m.isStale(MatchState::Domain::UnitStatus));
+        rm::GlobalUnitStatus u;
+        for (int i = 0; i < 10; ++i) u.add_robot_health(quint32(100 + i));
+        m.applyUnitStatus(u);
+        // 协议 2.2.4 固定顺序：索引 0–4 己方 1/2/3/4/7 号，5–9 对方。
+        QCOMPARE(m.allyHealth(0).value_or(0), quint32(105));
+        QCOMPARE(m.allyHealth(4).value_or(0), quint32(109));
+        QCOMPARE(m.enemyHealth(0).value_or(0), quint32(100));
+        QCOMPARE(m.enemyHealth(4).value_or(0), quint32(104));
+        QVERIFY(m.allyHealth(5) == std::nullopt);
+        QVERIFY(m.enemyHealth(-1) == std::nullopt);
+        QVERIFY(!m.isStale(MatchState::Domain::UnitStatus));
+        rm::RadarInfoToClient r;
+        for (int i = 0; i < 12; ++i) r.add_robot_info()->set_target_pos_x(quint32(i));
+        m.applyRadar(r);
+        // 协议 2.2.19 固定顺序：索引 0–5 对方，6–11 己方。
+        QCOMPARE(m.enemyRadar(0)->target_pos_x(), quint32(0));
+        QCOMPARE(m.allyRadar(0)->target_pos_x(), quint32(6));
+        QCOMPARE(m.allyRadar(5)->target_pos_x(), quint32(11));
+        QVERIFY(m.allyRadar(6) == std::nullopt);
+        rm::Event e; e.set_event_id(11);
+        m.applyEvent(e);
+        QCOMPARE(m.events().size(), 1);
+        QCOMPARE(m.events().constLast().event.event_id(), 11);
+        rm::Buff first; first.set_robot_id(104); first.set_buff_type(1); first.set_buff_left_time(10);
+        m.applyBuff(first);
+        rm::Buff updated; updated.set_robot_id(104); updated.set_buff_type(1); updated.set_buff_left_time(3);
+        m.applyBuff(updated);
+        QCOMPARE(m.buffs().size(), 1);
+        QCOMPARE(m.buffs().constFirst().buff.buff_left_time(), quint32(3));
+        rm::Buff other; other.set_robot_id(104); other.set_buff_type(5); other.set_buff_left_time(1);
+        m.applyBuff(other);
+        QCOMPARE(m.buffs().size(), 2);
+        rm::Buff expired; expired.set_robot_id(104); expired.set_buff_type(1); expired.set_buff_left_time(0);
+        m.applyBuff(expired);
+        QCOMPARE(m.buffs().size(), 1);
+        QCOMPARE(m.buffs().constFirst().buff.buff_type(), quint32(5));
+        m.reset();
+        QVERIFY(m.events().isEmpty()); QVERIFY(m.buffs().isEmpty());
+        QVERIFY(!m.allyHealth(0).has_value());
+        QVERIFY(m.isStale(MatchState::Domain::UnitStatus));
+        MatchState capped;
+        for (int i = 0; i < 210; ++i) { rm::Event flood; flood.set_event_id(i % 16); capped.applyEvent(flood); }
+        QCOMPARE(capped.events().size(), 200);
+    }
+    void matchStateStaleness() {
+        MatchState m;
+        rm::GameStatus g; g.set_current_stage(4);
+        m.applyGame(g);
+        rm::RobotStaticStatus s; s.set_robot_id(104);
+        m.applyStatic(s);
+        QVERIFY(!m.isStale(MatchState::Domain::Game));
+        QVERIFY(!m.isStale(MatchState::Domain::RobotStatic));
+        QCOMPARE(m.ageMs(MatchState::Domain::Logistics), qint64(-1));
+        QTest::qWait(1600);
+        // 5Hz 域 1.5s 过期；1Hz 域阈值 3s，此时仍应实时。
+        QVERIFY(m.isStale(MatchState::Domain::Game));
+        QVERIFY(!m.isStale(MatchState::Domain::RobotStatic));
+        QTest::qWait(1600);
+        QVERIFY(m.isStale(MatchState::Domain::RobotStatic));
     }
 };
 QTEST_GUILESS_MAIN(CoreTest)

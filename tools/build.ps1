@@ -25,7 +25,7 @@ if (Test-Path '.tools/sources/paho.mqtt.c-1.3.14') { $cmakeArgs += "-DFETCHCONTE
 cmake @cmakeArgs; Check-Exit
 cmake --build build -j 8; Check-Exit
 ctest --test-dir build --output-on-failure; Check-Exit
-& build/_deps/protobuf-build/protoc.exe --python_out=build/generated --proto_path=proto proto/game_status.proto; Check-Exit
+& build/_deps/protobuf-build/protoc.exe --python_out=build/generated --proto_path=proto proto/game_status.proto proto/rm_messages.proto; Check-Exit
 if ($Package) {
     New-Item -ItemType Directory -Force dist | Out-Null
     Copy-Item build/rm_client.exe,build/rm_receive.exe dist -Force

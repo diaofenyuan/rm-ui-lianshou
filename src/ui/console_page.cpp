@@ -1,0 +1,94 @@
+#include "console_page.h"
+#include "console_panel.h"
+#include <QGridLayout>
+#include <QVBoxLayout>
+
+namespace {
+QWidget *hint(const QString &text) {
+    auto *value = new QLabel(text);
+    value->setProperty("role", "muted");
+    value->setAlignment(Qt::AlignCenter);
+    value->setWordWrap(true);
+    return value;
+}
+}
+
+ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), match(state) {
+    setObjectName("consolePage");
+    auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(12);
+    bar = new ScoreBar(match);
+    layout->addWidget(bar);
+
+    ally = new RobotListPanel(match, false);
+    enemy = new RobotListPanel(match, true);
+    allySummary = new QLabel;
+    allySummary->setProperty("role", "muted");
+    enemySummary = new QLabel;
+    enemySummary->setProperty("role", "muted");
+
+    auto *grid = new QGridLayout;
+    grid->setSpacing(12);
+    layout->addLayout(grid, 1);
+
+    auto *allyPanel = new ConsolePanel("我方机器人", ally, allySummary);
+    allyPanel->setMinimumWidth(225);
+    auto *enemyPanel = new ConsolePanel("敌方机器人", enemy, enemySummary);
+    enemyPanel->setMinimumWidth(225);
+    auto *minimap = new ConsolePanel("战术地图",
+        hint("小地图与位置渲染在阶段 3 接入：己方/敌方位置、朝向、高亮与数据过期降级。"));
+    minimap->setMinimumWidth(140);
+    auto *respawn = new ConsolePanel("复活状态",
+        hint("复活读条、金币/免费复活提示在阶段 4 接入（RobotRespawnStatus 已接入数据层）。"));
+    auto *center = new QVBoxLayout;
+    center->setSpacing(12);
+    center->addWidget(minimap, 1);
+    center->addWidget(respawn);
+    grid->addLayout(center, 0, 1);
+    grid->addWidget(allyPanel, 0, 0);
+    grid->addWidget(enemyPanel, 0, 2);
+
+    auto *events = new ConsolePanel("战场事件", hint("事件时间线在阶段 4 接入；Event 消息已进入数据层与接收日志。"));
+    auto *analysis = new ConsolePanel("数据分析", hint("经济、总伤害与分类伤害统计在阶段 5 接入。"));
+    auto *video = new ConsolePanel("图传预览", hint("工业相机画面在阶段 5 接入。"));
+    for (auto *panel : {events, analysis, video}) panel->setMinimumHeight(104);
+    grid->addWidget(events, 1, 0);
+    grid->addWidget(analysis, 1, 1);
+    grid->addWidget(video, 1, 2);
+
+    grid->setColumnStretch(0, 5);
+    grid->setColumnStretch(1, 6);
+    grid->setColumnStretch(2, 5);
+    grid->setRowStretch(0, 5);
+    grid->setRowStretch(1, 2);
+
+    const auto refreshNow = [this] { refresh(); };
+    connect(match, &MatchState::gameChanged, this, refreshNow);
+    connect(match, &MatchState::unitStatusChanged, this, refreshNow);
+    connect(match, &MatchState::logisticsChanged, this, refreshNow);
+    connect(match, &MatchState::respawnChanged, this, refreshNow);
+    connect(match, &MatchState::robotStaticChanged, this, refreshNow);
+    connect(match, &MatchState::robotDynamicChanged, this, refreshNow);
+    connect(match, &MatchState::robotModuleChanged, this, refreshNow);
+    connect(match, &MatchState::stateReset, this, refreshNow);
+    ticker.setInterval(200);
+    connect(&ticker, &QTimer::timeout, this, refreshNow);
+    ticker.start();
+    refresh();
+}
+
+void ConsolePage::setRobot(int id) {
+    bar->setAllyBlue(id > 100);
+    ally->setOwnRobot(id);
+    enemy->setOwnRobot(id);
+    refresh();
+}
+
+void ConsolePage::refresh() {
+    allySummary->setText(ally->summaryText());
+    enemySummary->setText(enemy->summaryText());
+    bar->update();
+    ally->update();
+    enemy->update();
+}

@@ -1,7 +1,19 @@
 #include "receiver.h"
-#include <QMetaObject>
 #include <QCoreApplication>
 #include <QEvent>
+#include <QMetaObject>
+
+namespace {
+// 官方表 2-1 的服务器→自定义客户端 topic；topic 名与 Protobuf 消息名一致。
+constexpr const char *const kTopics[] = {
+    "GameStatus", "GlobalUnitStatus", "GlobalLogisticsStatus", "GlobalSpecialMechanism",
+    "Event", "RobotInjuryStat", "RobotRespawnStatus", "RobotStaticStatus",
+    "RobotDynamicStatus", "RobotModuleStatus", "RobotPosition", "Buff",
+    "PenaltyInfo", "RadarInfoToClient",
+};
+constexpr int kTopicCount = int(sizeof(kTopics) / sizeof(kTopics[0]));
+constexpr int kMaxPayloadBytes = 65536;
+}
 
 StatusReceiver::StatusReceiver(QObject *p) : QObject(p) {
     retry.setInterval(2000); retry.setSingleShot(true);
@@ -49,15 +61,23 @@ void StatusReceiver::connected(void *ctx, MQTTAsync_successData *) {
 }
 void StatusReceiver::subscribe() {
     if (!client) return;
+    pendingSubscriptions = subscribedCount = 0;
     MQTTAsync_responseOptions opts = MQTTAsync_responseOptions_initializer;
     opts.context = this; opts.onSuccess = subscribed; opts.onFailure = subscriptionFailed;
-    int rc = MQTTAsync_subscribe(client, "GameStatus", 1, &opts);
-    if (rc != MQTTASYNC_SUCCESS) subscriptionFailed(this, nullptr);
+    for (const char *topic : kTopics) {
+        if (MQTTAsync_subscribe(client, topic, 1, &opts) == MQTTASYNC_SUCCESS) {
+            ++pendingSubscriptions; ++subscribedCount;
+        }
+    }
+    if (!pendingSubscriptions) subscriptionFailed(this, nullptr);
 }
 void StatusReceiver::subscribed(void *ctx, MQTTAsync_successData *data) {
     if (data && data->alt.qos == 128) { subscriptionFailed(ctx, nullptr); return; }
     auto *s = static_cast<StatusReceiver *>(ctx);
-    QMetaObject::invokeMethod(s, [s] { emit s->stateChanged("已订阅 GameStatus · QoS 1", true); }, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(s, [s] {
+        if (--s->pendingSubscriptions > 0) return;
+        emit s->stateChanged(QString("已订阅 %1 个 topic · QoS 1").arg(s->subscribedCount), true);
+    }, Qt::QueuedConnection);
 }
 void StatusReceiver::subscriptionFailed(void *ctx, MQTTAsync_failureData *) {
     auto *s = static_cast<StatusReceiver *>(ctx);
@@ -76,19 +96,49 @@ int StatusReceiver::message(void *ctx, char *topic, int topicLen, MQTTAsync_mess
     const QByteArray name = topicLen ? QByteArray(topic, topicLen) : QByteArray(topic ? topic : "");
     const int payloadBytes = msg ? msg->payloadlen : -1;
     const int qos = msg ? msg->qos : -1;
-    if (name == "GameStatus" && msg) {
-        rm::GameStatus value;
-        const bool valid = msg->payloadlen >= 0 && msg->payloadlen <= 65536 && value.ParseFromArray(msg->payload, msg->payloadlen);
-        if (valid) QMetaObject::invokeMethod(s, [s, value, payloadBytes, qos] {
-            ++s->receivedMessages; s->lastPayloadBytes = payloadBytes; s->lastQos = qos;
-            emit s->received(value); emit s->receivedInfo(value, payloadBytes, qos);
-        }, Qt::QueuedConnection);
-        else QMetaObject::invokeMethod(s, [s] {
-            ++s->malformedMessages;
-            emit s->stateChanged(QString("已丢弃损坏的 Protobuf 消息（累计 %1 条）").arg(s->malformedMessages), true);
+    if (msg && payloadBytes >= 0) {
+        // 解析延后到 UI 线程执行，此处必须复制 payload，随后立即归还 Paho 缓冲。
+        const QByteArray payload(static_cast<const char *>(msg->payload), payloadBytes);
+        QMetaObject::invokeMethod(s, [s, name, payload, payloadBytes, qos] {
+            s->dispatch(name, payload, payloadBytes, qos);
         }, Qt::QueuedConnection);
     }
     if (msg) MQTTAsync_freeMessage(&msg);
     if (topic) MQTTAsync_free(topic);
     return 1;
+}
+template <typename T>
+void StatusReceiver::emitParsed(const QByteArray &payload, void (StatusReceiver::*signal)(T)) {
+    T value;
+    if (!value.ParseFromArray(payload.constData(), payload.size())) return reportMalformed();
+    ++receivedMessages;
+    (this->*signal)(value);
+}
+void StatusReceiver::reportMalformed() {
+    ++malformedMessages;
+    emit stateChanged(QString("已丢弃损坏的 Protobuf 消息（累计 %1 条）").arg(malformedMessages), true);
+}
+void StatusReceiver::dispatch(const QByteArray &topic, const QByteArray &payload, int payloadBytes, int qos) {
+    // 未知 topic 不属于本项目协议契约，直接忽略；已知 topic 只统计损坏报文，不中断接收。
+    if (topic == "GameStatus") {
+        rm::GameStatus value;
+        if (payloadBytes <= kMaxPayloadBytes && value.ParseFromArray(payload.constData(), payloadBytes)) {
+            ++receivedMessages; lastPayloadBytes = payloadBytes; lastQos = qos;
+            emit received(value); emit receivedInfo(value, payloadBytes, qos);
+        } else reportMalformed();
+        return;
+    }
+    if (topic == "GlobalUnitStatus") return emitParsed(payload, &StatusReceiver::receivedUnitStatus);
+    if (topic == "GlobalLogisticsStatus") return emitParsed(payload, &StatusReceiver::receivedLogistics);
+    if (topic == "GlobalSpecialMechanism") return emitParsed(payload, &StatusReceiver::receivedSpecialMechanism);
+    if (topic == "Event") return emitParsed(payload, &StatusReceiver::receivedEvent);
+    if (topic == "RobotInjuryStat") return emitParsed(payload, &StatusReceiver::receivedInjury);
+    if (topic == "RobotRespawnStatus") return emitParsed(payload, &StatusReceiver::receivedRespawn);
+    if (topic == "RobotStaticStatus") return emitParsed(payload, &StatusReceiver::receivedStatic);
+    if (topic == "RobotDynamicStatus") return emitParsed(payload, &StatusReceiver::receivedDynamic);
+    if (topic == "RobotModuleStatus") return emitParsed(payload, &StatusReceiver::receivedModule);
+    if (topic == "RobotPosition") return emitParsed(payload, &StatusReceiver::receivedPosition);
+    if (topic == "Buff") return emitParsed(payload, &StatusReceiver::receivedBuff);
+    if (topic == "PenaltyInfo") return emitParsed(payload, &StatusReceiver::receivedPenalty);
+    if (topic == "RadarInfoToClient") return emitParsed(payload, &StatusReceiver::receivedRadar);
 }

@@ -1,0 +1,176 @@
+syntax = "proto3";
+package rm;
+
+// RM2026 通信协议 V2.0.0（2026-06-26）2.2.4–2.2.15、2.2.19 节的 MQTT 服务器→自定义客户端消息。
+// Topic 名与消息名一致；字段编号与类型以官方协议为准，不得改动。
+// 官方频率：GlobalUnitStatus/GlobalLogisticsStatus/GlobalSpecialMechanism 1Hz、Event 触发式、
+// RobotInjuryStat/RobotRespawnStatus/RobotStaticStatus/RobotModuleStatus 1Hz、
+// RobotDynamicStatus 10Hz、RobotPosition 1Hz、Buff 获得时触发后 1Hz、PenaltyInfo/RadarInfoToClient 触发式。
+
+// 2.2.4 同步基地、前哨站和所有机器人状态（1Hz）。
+// robot_health 按己方 1、2、3、4、7 号，对方 1、2、3、4、7 号顺序共 10 项；
+// robot_bullets 为己方机器人剩余累计发弹量。
+message GlobalUnitStatus {
+  optional uint32 base_health = 1;           // 己方基地当前血量（0=已摧毁）
+  optional uint32 base_status = 2;           // 0 无敌 / 1 解除无敌护甲未展开 / 2 解除无敌护甲展开
+  optional uint32 base_shield = 3;           // 己方基地当前护盾值（0=无护盾）
+  optional uint32 outpost_health = 4;        // 己方前哨站当前血量（0=已摧毁）
+  optional uint32 outpost_status = 5;        // 0 无敌 / 1 存活装甲旋转 / 2 存活装甲停转 / 3 击毁不可重建 / 4 击毁可重建 / 5 重建中
+  optional uint32 enemy_base_health = 6;
+  optional uint32 enemy_base_status = 7;
+  optional uint32 enemy_base_shield = 8;
+  optional uint32 enemy_outpost_health = 9;
+  optional uint32 enemy_outpost_status = 10;
+  repeated uint32 robot_health = 11;
+  repeated int32 robot_bullets = 12;
+  optional uint32 total_damage_ally = 13;    // 己方累计总伤害
+  optional uint32 total_damage_enemy = 14;   // 对方累计总伤害
+}
+
+// 2.2.5 同步全局后勤信息（1Hz）。
+message GlobalLogisticsStatus {
+  optional uint32 remaining_economy = 1;     // 己方当前经济
+  optional uint64 total_economy_obtained = 2; // 己方累计总经济
+  optional uint32 tech_level = 3;            // 己方科技等级（工程装配最高难度）
+  optional uint32 encryption_level = 4;      // 己方加密等级（雷达解析信息波机制）
+}
+
+// 2.2.6 正在生效的全局特殊机制（1Hz）。
+// mechanism_id：1 己方堡垒被对方占领计时、2 对方堡垒被己方占领计时。
+message GlobalSpecialMechanism {
+  repeated uint32 mechanism_id = 1;
+  repeated int32 mechanism_time_sec = 2;
+}
+
+// 2.2.7 全局事件通知（触发式）。param 含义随 event_id 变化：
+// 1 击杀（"被击杀者,击杀者"，如 "1,101"）、2 前哨站被摧毁（红 11 / 蓝 111）、
+// 3 大能量机关激活臂数与平均环数（"10,9.6"）、4 能量机关进入已激活（1 小 / 2 大）、
+// 5 己方英雄狙击累计伤害、6 对方英雄狙击累计伤害、7 对方呼叫空中支援、
+// 8 对方空中支援被反制（剩余可反制次数）、9 飞镖命中（"命中方,目标"）、
+// 10 对方飞镖闸门开启、11 己方基地遭到攻击（5s 冷却）、12 对方前哨站停转、
+// 13 对方基地护甲展开、14 对方四级装配强制退出缓冲期、15 装配结果（0–8）。
+message Event {
+  optional int32 event_id = 1;
+  optional string param = 2;
+}
+
+// 2.2.8 机器人一次存活期间累计受伤统计（1Hz）。killer_id 为 0 表示未检测到击杀者。
+message RobotInjuryStat {
+  optional uint32 total_damage = 1;
+  optional uint32 collision_damage = 2;
+  optional uint32 small_projectile_damage = 3; // 17mm 弹丸伤害
+  optional uint32 large_projectile_damage = 4; // 42mm 弹丸伤害
+  optional uint32 dart_splash_damage = 5;
+  optional uint32 module_offline_damage = 6;
+  optional uint32 offline_damage = 7;
+  optional uint32 penalty_damage = 8;
+  optional uint32 server_kill_damage = 9;
+  optional uint32 killer_id = 10;
+}
+
+// 2.2.9 机器人复活状态同步（1Hz）。
+message RobotRespawnStatus {
+  optional bool is_pending_respawn = 1;
+  optional uint32 total_respawn_progress = 2;
+  optional uint32 current_respawn_progress = 3;
+  optional bool can_free_respawn = 4;
+  optional uint32 gold_cost_for_respawn = 5;
+  optional bool can_pay_for_respawn = 6;
+}
+
+// 2.2.10 机器人固定属性和配置（1Hz）。
+// connection_state：0 未连接 / 1 已连接；field_state：0 已上场 / 1 未上场；
+// alive_state：0 未知 / 1 存活 / 2 战亡。
+// performance_system_shooter：1 冷却优先 / 2 爆发优先 / 3 英雄近战 / 4 英雄远程；
+// performance_system_chassis：1 血量优先 / 2 功率优先 / 3 英雄近战 / 4 英雄远程。
+message RobotStaticStatus {
+  optional uint32 connection_state = 1;
+  optional uint32 field_state = 2;
+  optional uint32 alive_state = 3;
+  optional uint32 robot_id = 4;
+  optional uint32 robot_type = 5;
+  optional uint32 performance_system_shooter = 6;
+  optional uint32 performance_system_chassis = 7;
+  optional uint32 level = 8;
+  optional uint32 max_health = 9;
+  optional uint32 max_heat = 10;
+  optional float heat_cooldown_rate = 11;    // 每秒
+  optional uint32 max_power = 12;
+  optional uint32 max_buffer_energy = 13;
+  optional uint32 max_chassis_energy = 14;
+}
+
+// 2.2.11 机器人实时数据（10Hz）。
+message RobotDynamicStatus {
+  optional uint32 current_health = 1;
+  optional float current_heat = 2;
+  optional float last_projectile_fire_rate = 3;
+  optional uint32 current_chassis_energy = 4;
+  optional uint32 current_buffer_energy = 5;
+  optional uint32 current_experience = 6;
+  optional uint32 experience_for_upgrade = 7;
+  optional uint32 total_projectiles_fired = 8;
+  optional uint32 remaining_ammo = 9;
+  optional bool is_out_of_combat = 10;
+  optional uint32 out_of_combat_countdown = 11;
+  optional bool can_remote_heal = 12;
+  optional bool can_remote_ammo = 13;
+}
+
+// 2.2.12 机器人各模块运行状态（1Hz）。各字段：0 离线 / 1 在线 / 2 因安装不规范被视为离线。
+message RobotModuleStatus {
+  optional uint32 power_manager = 1;
+  optional uint32 rfid = 2;
+  optional uint32 light_strip = 3;
+  optional uint32 small_shooter = 4;         // 17mm 发射机构
+  optional uint32 big_shooter = 5;           // 42mm 发射机构
+  optional uint32 uwb = 6;                   // 定位模块
+  optional uint32 armor = 7;
+  optional uint32 video_transmission = 8;
+  optional uint32 capacitor = 9;
+  optional uint32 main_controller = 10;
+  optional uint32 laser_detection_module = 11;
+}
+
+// 2.2.13 机器人空间坐标和朝向（1Hz）。yaw 单位为度，正北为 0 度。
+// robot_id 为坐标归属机器人（6/106 空中、7/107 哨兵，仅云台手客户端生效）。
+message RobotPosition {
+  optional float x = 1;
+  optional float y = 2;
+  optional float z = 3;
+  optional float yaw = 4;
+  optional uint32 robot_id = 5;
+}
+
+// 2.2.14 Buff 效果信息（获得时触发，此后 1Hz 直到失去）。
+// buff_type：1 攻击 / 2 防御（含易伤）/ 3 射击热量冷却 / 4 底盘功率 / 5 回血 / 6 可兑换发弹量 / 7 地形跨越（预备）。
+// buff_level：类型 3 时为冷却增加值（x/s），其余为百分比。
+message Buff {
+  optional uint32 robot_id = 1;
+  optional uint32 buff_type = 2;
+  optional int32 buff_level = 3;
+  optional uint32 buff_max_time = 4;
+  optional uint32 buff_left_time = 5;
+}
+
+// 2.2.15 判罚信息同步（触发式）。
+// penalty_type：1 黄牌 / 2 双方黄牌 / 3 红牌 / 4 超功率 / 5 超热量 / 6 超射速。
+message PenaltyInfo {
+  optional uint32 penalty_type = 1;
+  optional uint32 penalty_effect_sec = 2;
+  optional uint32 total_penalty_num = 3;
+}
+
+// 2.2.19 雷达发送的机器人位置信息（触发式），坐标单位 cm。
+// robot_info 按对方 1、2、3、4、6、7 号，己方 1、2、3、4、6、7 号顺序共 12 项。
+// （官方文本将首字段写作 "repeated uint32 RadarSingleRobotInfo"，应为嵌套消息 repeated，按其
+//   紧随的 RadarSingleRobotInfo 结构实现。）
+message RadarInfoToClient {
+  repeated RadarSingleRobotInfo robot_info = 1;
+}
+
+message RadarSingleRobotInfo {
+  optional uint32 target_pos_x = 1;          // cm
+  optional uint32 target_pos_y = 2;          // cm
+  optional uint32 is_high_light = 3;         // 0 否 / 1 是 / 2 是但目标定位模块离线
+}

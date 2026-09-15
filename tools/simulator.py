@@ -3,6 +3,7 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import math
 from pathlib import Path
 import re
 import socket
@@ -17,6 +18,7 @@ import paho.mqtt.client as mqtt
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "build" / "generated"))
 import game_status_pb2
+import rm_messages_pb2
 
 
 def video_frames(ffmpeg, video_path):
@@ -54,6 +56,109 @@ def game_status(elapsed, rate=1.0):
         end_reason=2 if stage==5 else 255)
 
 
+# 总控台数据域的合成内容：数值仅为让面板可观察，不代表真实比赛逻辑。
+# 频率对齐官方表 2-1：Dynamic 10Hz，其余慢速域 1Hz，Event/Penalty 触发式。
+
+def global_unit_status(elapsed):
+    # 协议 2.2.4：robot_health 按己方 1/2/3/4/7 号、对方 1/2/3/4/7 号顺序共 10 项。
+    phase = int(elapsed) % 60
+    def hp(base, delay): return max(0, base - max(0, phase - delay) * 7)
+    ally = [hp(500, 0), hp(400, 5), hp(350, 10), hp(350, 15), hp(300, 20)]
+    enemy = [hp(500, 2), hp(400, 8), hp(350, 12), hp(350, 18), hp(300, 22)]
+    base_state = 0 if phase < 20 else (1 if phase < 40 else 2)
+    outpost_state = 0 if phase < 25 else 1
+    return rm_messages_pb2.GlobalUnitStatus(
+        base_health=max(0, 5000 - phase * 30), base_status=base_state,
+        base_shield=200 if phase < 20 else 0,
+        outpost_health=max(0, 1500 - phase * 10), outpost_status=outpost_state,
+        enemy_base_health=max(0, 5000 - phase * 20), enemy_base_status=base_state, enemy_base_shield=0,
+        enemy_outpost_health=max(0, 1500 - phase * 12), enemy_outpost_status=outpost_state,
+        robot_health=ally + enemy, robot_bullets=[max(0, 800 - phase * 5)] * 5,
+        total_damage_ally=phase * 130, total_damage_enemy=phase * 110)
+
+
+def global_logistics(elapsed):
+    phase = int(elapsed) % 60
+    return rm_messages_pb2.GlobalLogisticsStatus(remaining_economy=400 + phase * 3,
+        total_economy_obtained=4000 + phase * 13, tech_level=1 + phase // 20 % 3, encryption_level=2)
+
+
+def global_special_mechanism(elapsed):
+    phase = int(elapsed) % 60
+    if 30 <= phase < 35:
+        return rm_messages_pb2.GlobalSpecialMechanism(mechanism_id=[1], mechanism_time_sec=[35 - phase])
+    return rm_messages_pb2.GlobalSpecialMechanism()
+
+
+def robot_static(elapsed, robot_id):
+    phase = int(elapsed) % 60
+    return rm_messages_pb2.RobotStaticStatus(connection_state=1, field_state=0,
+        alive_state=1 if phase < 55 else 2, robot_id=robot_id, robot_type=robot_id % 100,
+        performance_system_shooter=1, performance_system_chassis=2, level=1 + phase // 45 % 3,
+        max_health=400, max_heat=100, heat_cooldown_rate=10.0, max_power=80,
+        max_buffer_energy=60, max_chassis_energy=100)
+
+
+def robot_dynamic(elapsed):
+    t = elapsed % 60
+    return rm_messages_pb2.RobotDynamicStatus(current_health=max(0, 400 - int(t) * 5),
+        current_heat=(t * 17) % 100, last_projectile_fire_rate=18.5, current_chassis_energy=40,
+        current_buffer_energy=30, current_experience=int(t) * 12 % 600,
+        experience_for_upgrade=600 - int(t) * 12 % 600, total_projectiles_fired=int(t) * 3,
+        remaining_ammo=max(0, 800 - int(t) * 3), is_out_of_combat=False, out_of_combat_countdown=0,
+        can_remote_heal=True, can_remote_ammo=True)
+
+
+def robot_module(_elapsed):
+    return rm_messages_pb2.RobotModuleStatus(power_manager=1, rfid=0, light_strip=1,
+        small_shooter=1, big_shooter=0, uwb=0, armor=1, video_transmission=1,
+        capacitor=1, main_controller=1, laser_detection_module=1)
+
+
+def injury_stat(elapsed):
+    phase = int(elapsed) % 60
+    return rm_messages_pb2.RobotInjuryStat(total_damage=phase * 90, collision_damage=phase * 4,
+        small_projectile_damage=phase * 60, large_projectile_damage=phase * 15,
+        dart_splash_damage=phase * 3, module_offline_damage=phase * 2,
+        offline_damage=phase, penalty_damage=phase * 5, server_kill_damage=0,
+        killer_id=0 if phase < 30 else 101)
+
+
+def robot_respawn(elapsed):
+    phase = int(elapsed) % 20
+    if phase >= 18:
+        return rm_messages_pb2.RobotRespawnStatus(is_pending_respawn=True, total_respawn_progress=33,
+            current_respawn_progress=min(33, (phase - 18) * 16), can_free_respawn=True,
+            gold_cost_for_respawn=440, can_pay_for_respawn=True)
+    return rm_messages_pb2.RobotRespawnStatus(is_pending_respawn=False)
+
+
+def robot_position(elapsed, robot_id):
+    angle = elapsed * 0.4
+    return rm_messages_pb2.RobotPosition(x=4.0 + 2.0 * math.cos(angle), y=3.0 + 2.0 * math.sin(angle),
+        z=0.0, yaw=math.degrees(angle) % 360, robot_id=robot_id)
+
+
+def radar_info(elapsed):
+    infos = [rm_messages_pb2.RadarSingleRobotInfo(
+        target_pos_x=int((4.0 + 2.5 * math.cos(elapsed * 0.4 + i * 0.5)) * 100),
+        target_pos_y=int((3.0 + 2.5 * math.sin(elapsed * 0.4 + i * 0.5)) * 100),
+        is_high_light=i % 3) for i in range(12)]
+    return rm_messages_pb2.RadarInfoToClient(robot_info=infos)
+
+
+def kill_event():
+    return rm_messages_pb2.Event(event_id=1, param="1,101")
+
+
+def active_buff(elapsed, robot_id):
+    phase = elapsed % 30
+    if phase < 10:
+        return rm_messages_pb2.Buff(robot_id=robot_id, buff_type=1, buff_level=25,
+            buff_max_time=10, buff_left_time=10 - int(phase))
+    return rm_messages_pb2.Buff()
+
+
 async def run(args):
     frames = await asyncio.to_thread(video_frames, args.ffmpeg, ROOT / ".tools" / "demo.hevc")
     broker = Broker({"listeners": {"default": {"type": "tcp", "bind": f"{args.bind}:{args.port}"}},
@@ -74,6 +179,36 @@ async def run(args):
                     args.status_rate).SerializeToString(), qos=1)
             await asyncio.sleep(0.2)
 
+    async def console_telemetry():
+        # Dynamic 10Hz；慢速域合并到每 10 个 tick（1Hz）；Event/Penalty 按触发节奏插入。
+        tick = 0
+        while True:
+            if publisher.is_connected():
+                t = time.monotonic() - started
+                publisher.publish("RobotDynamicStatus", robot_dynamic(t).SerializeToString(), qos=1)
+                if tick % 10 == 0:
+                    for topic, message in (
+                        ("GlobalUnitStatus", global_unit_status(t)),
+                        ("GlobalLogisticsStatus", global_logistics(t)),
+                        ("GlobalSpecialMechanism", global_special_mechanism(t)),
+                        ("RobotStaticStatus", robot_static(t, args.robot_id)),
+                        ("RobotModuleStatus", robot_module(t)),
+                        ("RobotInjuryStat", injury_stat(t)),
+                        ("RobotRespawnStatus", robot_respawn(t)),
+                        ("RobotPosition", robot_position(t, args.robot_id)),
+                        ("RadarInfoToClient", radar_info(t)),
+                        ("Buff", active_buff(t, args.robot_id)),
+                    ):
+                        payload = message.SerializeToString()
+                        if payload: publisher.publish(topic, payload, qos=1)
+                    if int(t) % 37 == 36:
+                        penalty = rm_messages_pb2.PenaltyInfo(penalty_type=4, penalty_effect_sec=5, total_penalty_num=1)
+                        publisher.publish("PenaltyInfo", penalty.SerializeToString(), qos=1)
+                if tick % 250 == 125:
+                    publisher.publish("Event", kill_event().SerializeToString(), qos=1)
+            tick += 1
+            await asyncio.sleep(0.1)
+
     async def video():
         frame_id = 0
         deadline = time.monotonic()
@@ -89,7 +224,7 @@ async def run(args):
             deadline += 1/30
             await asyncio.sleep(max(0, deadline-time.monotonic()))
 
-    jobs = [asyncio.create_task(telemetry()), asyncio.create_task(video())]
+    jobs = [asyncio.create_task(telemetry()), asyncio.create_task(console_telemetry()), asyncio.create_task(video())]
     try:
         if args.seconds:
             await asyncio.wait_for(asyncio.gather(*jobs), timeout=args.seconds)
@@ -117,6 +252,8 @@ if __name__ == "__main__":
     p.add_argument("--slice-base", type=int, choices=(0, 1), default=0, help="UDP 分片编号从 0 或 1 开始")
     p.add_argument("--reorder", action="store_true")
     p.add_argument("--drop-every", type=int, default=0)
+    p.add_argument("--robot-id", type=int, default=104,
+                   help="单兵消息（RobotStaticStatus/RobotDynamicStatus 等）使用的机器人 ID")
     logging.basicConfig(level=logging.ERROR)
     with contextlib.suppress(KeyboardInterrupt):
         parsed = p.parse_args()
