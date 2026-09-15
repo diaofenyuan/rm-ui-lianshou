@@ -89,3 +89,15 @@
 ```
 
 未实装的面板显示"阶段 N 接入"占位提示，整页形态保持完整，便于截图对比与回归。
+
+## 验证
+
+```powershell
+# 编译 + 核心测试（含坐标换算与时间线推导）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Package
+
+# 总控台专项：点位、时间线、复活、分析与图传预览，会占用 3333 / 3334
+.\.venv\Scripts\python.exe -X utf8 tools\check_console.py
+```
+
+`--ui-checks` 会切到总控台逐项断言面板可见性与内容，并保存 `build/console-console.png`、`build/console-console-minimap.png`、`build/console-console-compact.png`（1024×720 紧凑布局）；`--metrics` 额外输出 `console_*` 证据字段（时间线条数、点位数量、位置与雷达更新次数、各域时效、分析摘要、图传预览是否有帧）。

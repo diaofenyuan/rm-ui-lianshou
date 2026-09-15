@@ -1,16 +1,18 @@
 #pragma once
+#include "analysis_panel.h"
 #include "event_timeline.h"
 #include "match_state.h"
 #include "minimap.h"
 #include "respawn_panel.h"
 #include "robot_list.h"
 #include "score_bar.h"
+#include "video_preview.h"
 #include <QLabel>
 #include <QTimer>
 #include <QWidget>
 
 // 总控台页面：顶栏比分条 + 我方/敌方机器人列表 + 中央战术地图与复活状态 + 底部事件、分析、图传预览。
-// 数据域信号与 200ms 时效轮询都会触发本页刷新；分析与预览按路线图后续接入。
+// 数据域信号与 200ms 时效轮询都会触发本页刷新；图传帧由 MainWindow 投递。
 class ConsolePage : public QWidget {
     Q_OBJECT
 public:
@@ -22,6 +24,8 @@ public:
     MinimapPanel *map() const { return minimap; }
     RespawnPanel *respawnState() const { return respawnPanel; }
     EventTimelinePanel *events() const { return timeline; }
+    AnalysisPanel *analysis() const { return analysisPanel; }
+    VideoPreviewPanel *videoPreview() const { return videoPanel; }
 private:
     MatchState *match;
     ScoreBar *bar;
@@ -29,7 +33,9 @@ private:
     MinimapPanel *minimap;
     RespawnPanel *respawnPanel;
     EventTimelinePanel *timeline;
-    QLabel *allySummary, *enemySummary;
+    AnalysisPanel *analysisPanel;
+    VideoPreviewPanel *videoPanel;
+    QLabel *allySummary, *enemySummary, *analysisSummary;
     QTimer ticker;
     void refresh();
 };

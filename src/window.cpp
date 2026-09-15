@@ -636,6 +636,7 @@ void MainWindow::refresh() {
     const QString base = video.sliceBase() < 0 ? "未判定" : QString::number(video.sliceBase());
     packetInfo->setText(QString("UDP %1 包 · 无效包 %2 · 分片基数 %3").arg(video.packets).arg(video.invalid()).arg(base));
     logToggle->setText(QString("接收日志 · %1 条比赛信息").arg(messages)); canvas->update(); matchSummary->update();
+    consolePage->videoPreview()->setFrame(canvas->image, canvas->videoStale);
     refreshStatusDetails();
 }
 QJsonObject MainWindow::metrics() const {
@@ -646,6 +647,15 @@ QJsonObject MainWindow::metrics() const {
         {"last_payload_bytes", receiver.lastPayloadBytes}, {"last_qos", receiver.lastQos},
         {"video_slice_base", video.sliceBase()}, {"video_zero_based_frames", double(video.zeroBasedFrames())},
         {"video_one_based_frames", double(video.oneBasedFrames())}, {"console_page", double(pages->currentIndex())},
+        // 总控台证据：面板内容、数据域时效与累计接收计数，供 check_console.py 校验。
+        {"console_timeline", double(match.timeline().size())}, {"console_markers", double(consolePage->map()->markerCount())},
+        {"console_video_preview", consolePage->videoPreview()->hasFrame()},
+        {"console_analysis", consolePage->analysis()->statusText()},
+        {"console_respawn", consolePage->respawnState()->statusText()},
+        {"console_position_messages", double(match.positionMessages)}, {"console_radar_messages", double(match.radarMessages)},
+        {"console_event_messages", double(match.eventMessages)}, {"console_penalty_messages", double(match.penaltyMessages)},
+        {"console_position_age_ms", double(match.ageMs(MatchState::Domain::Position))},
+        {"console_radar_age_ms", double(match.ageMs(MatchState::Domain::Radar))},
         {"status", status::json(canvas->data)}};
 }
 bool MainWindow::saveEvidence(const QString &path) { return grab().save(path); }
@@ -680,8 +690,29 @@ bool MainWindow::runUiChecks(const QString &evidencePrefix) {
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     okay = pages->currentWidget() == consolePage && consolePage->scoreBar()->isVisible()
         && consolePage->allyList()->isVisible() && consolePage->enemyList()->isVisible()
+        && consolePage->map()->isVisible() && consolePage->respawnState()->isVisible()
+        && consolePage->events()->isVisible() && consolePage->analysis()->isVisible()
+        && consolePage->videoPreview()->isVisible()
         && consolePage->allyList()->rowCount() == 5 && consolePage->enemyList()->rowCount() == 5 && okay;
-    if (!evidencePrefix.isEmpty()) okay = saveEvidence(evidencePrefix + "-console.png") && okay;
+    // 有数据时才要求面板出内容，便于在无模拟端时也能跑通自检。
+    if (match.ageMs(MatchState::Domain::Radar) >= 0)
+        okay = consolePage->map()->markerCount() > 0 && okay;
+    if (!match.timeline().isEmpty())
+        okay = consolePage->events()->rowCount() > 0 && okay;
+    if (match.ageMs(MatchState::Domain::Logistics) >= 0)
+        okay = consolePage->analysis()->statusText() != "等待数据" && okay;
+    if (match.ageMs(MatchState::Domain::Respawn) >= 0)
+        okay = consolePage->respawnState()->statusText() != "未收到复活数据" && okay;
+    if (!canvas->image.isNull()) okay = consolePage->videoPreview()->hasFrame() && okay;
+    if (!evidencePrefix.isEmpty()) {
+        okay = saveEvidence(evidencePrefix + "-console.png") && okay;
+        okay = consolePage->map()->grab().save(evidencePrefix + "-console-minimap.png") && okay;
+        resize(1024, 720); QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        okay = consolePage->scoreBar()->isVisible() && consolePage->map()->isVisible()
+            && consolePage->map()->width() > 100 && consolePage->allyList()->width() > 100 && okay;
+        okay = saveEvidence(evidencePrefix + "-console-compact.png") && okay;
+        resize(originalSize); QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    }
     checkpoint(okay, "总控台页面");
     pages->setCurrentIndex(1);
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);

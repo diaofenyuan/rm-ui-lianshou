@@ -69,14 +69,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Setup -Pack
 
 此检查运行已经打包的 EXE，以蓝方 4 号步兵（ID 104）连接，验证 PLUS1 输出、PLUS2 实际解码、18 个红蓝操作位的选择、待应用身份保持、专注模式、叠加与全屏，以及模拟服务器停止 3 秒后重新启动的恢复情况；图传同时注入乱序和每 17 帧丢失一个分片。结果留在 `build/integration-metrics.json`，程序窗口截图为 `build/preview.png`，专注与紧凑布局截图为 `build/operator-*.png`。测试结果只代表本地模拟。
 
+```powershell
+# 只验证总控台：点位、时间线、复活、分析与图传预览，同样占用 3333、3334。
+.\.venv\Scripts\python.exe -X utf8 tools\check_console.py
+```
+
+总控台检查要求战术地图已绘制雷达点位、事件时间线有条目、数据分析与复活状态已收到数据、图传预览有解码帧，并保存 `build/console-console.png`、`build/console-console-minimap.png`、`build/console-console-compact.png` 与 `build/console-live.png` 四张截图；证据留在 `build/console-evidence.json`。
+
 ## 代码入口
 
 | 部分 | 入口 |
 |---|---|
-| 官方消息定义 | `proto/game_status.proto` |
+| 官方消息定义 | `proto/game_status.proto`、`proto/rm_messages.proto` |
 | MQTT 接收与重连 | `src/receiver.cpp` |
+| 比赛状态聚合与事件时间线 | `src/match_state.cpp` |
+| 场地坐标换算 | `src/map_transform.cpp` |
 | 图传重组与解码 | `src/assembler.cpp`、`src/video.cpp` |
 | 中文界面及叠加 | `src/window.cpp` |
+| 总控台面板 | `src/ui/console_page.cpp` 及其同目录控件 |
 | 兵种与机器人编号 | `src/operator_profile.h` |
 | 独立终端程序 | `src/receive_main.cpp` |
 | 模拟发送端 | `tools/simulator.py` |

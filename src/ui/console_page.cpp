@@ -58,8 +58,12 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     connect(match, &MatchState::timelineChanged, eventSummary, [eventSummary, this] {
         eventSummary->setText(QString("共 %1 条").arg(match->timeline().size()));
     });
-    auto *analysis = new ConsolePanel("数据分析", hint("经济、总伤害与分类伤害统计在阶段 5 接入。"));
-    auto *video = new ConsolePanel("图传预览", hint("工业相机画面在阶段 5 接入。"));
+    analysisPanel = new AnalysisPanel(match);
+    analysisSummary = new QLabel;
+    analysisSummary->setProperty("role", "muted");
+    auto *analysis = new ConsolePanel("数据分析", analysisPanel, analysisSummary);
+    videoPanel = new VideoPreviewPanel;
+    auto *video = new ConsolePanel("图传预览", videoPanel);
     for (auto *panel : {events, analysis, video}) panel->setMinimumHeight(104);
     grid->addWidget(events, 1, 0);
     grid->addWidget(analysis, 1, 1);
@@ -91,6 +95,7 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
 
 void ConsolePage::setRobot(int id) {
     bar->setAllyBlue(id > 100);
+    analysisPanel->setAllyBlue(id > 100);
     ally->setOwnRobot(id);
     enemy->setOwnRobot(id);
     minimap->setOwnRobot(id);
@@ -100,10 +105,13 @@ void ConsolePage::setRobot(int id) {
 void ConsolePage::refresh() {
     allySummary->setText(ally->summaryText());
     enemySummary->setText(enemy->summaryText());
+    analysisSummary->setText(analysisPanel->statusText());
     bar->update();
     ally->update();
     enemy->update();
     minimap->update();
     respawnPanel->update();
     timeline->update();
+    analysisPanel->update();
+    videoPanel->update();
 }
