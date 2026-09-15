@@ -2,21 +2,23 @@
 #include "map_transform.h"
 #include "theme.h"
 #include <QFontMetrics>
+#include <QImageReader>
 #include <QPainter>
+#include <QPainterPath>
+#include <QPixmap>
 #include <cmath>
 
 namespace {
 // 雷达槽位顺序（协议 2.2.19）：对方 1/2/3/4/6/7 号，随后是己方同编号。
 constexpr int kRadarNumbers[6] = {1, 2, 3, 4, 6, 7};
 
-// 基地与前哨站位置为示意画法：协议未给出固定设施坐标，仅表示端别与前后关系。
-constexpr double kBaseDistM = 1.5;
-constexpr double kOutpostDistM = 5.5;
-
-double endIndex(bool allyBlue, bool enemy) {
-    // 0 表示红方端、1 表示蓝方端。
-    const bool redEnd = allyBlue ? enemy : !enemy;
-    return redEnd ? 0.0 : 1.0;
+// 底图来自官方场地地图（28 m × 15 m，红方端在左、+Y 朝上），放在源码树 assets/map 下，
+// 通过 resources.qrc 以 :/map/field.jpg 打包；素材权属见 docs/console-design.md。
+QPixmap loadFieldMap() {
+    QImageReader reader(":/map/field.jpg");
+    reader.setAutoTransform(false);   // 素材自带 EXIF 旋转标记，按原始像素读取即为横向场地。
+    const QImage image = reader.read();
+    return image.isNull() ? QPixmap() : QPixmap::fromImage(image);
 }
 }
 
@@ -89,47 +91,36 @@ void MinimapPanel::paintEvent(QPaintEvent *) {
     const QRectF area = rect().adjusted(2, 2, -2, -2);
     const QRectF footer(area.left(), area.bottom() - 16, area.width(), 16);
     const QRectF field = maptf::fieldRect(QRectF(area.left(), area.top(), area.width(), area.height() - 18));
-    // 场地坐标（米）→ 控件像素，含视角变换，保证底图与点位方向一致。
-    const auto pixel = [this, &field](double xM, double yM) {
-        return maptf::toPixels(maptf::forView(maptf::normalize(xM, yM), allyBlue), field);
-    };
 
-    // 示意底图：场地轮廓、中线与中央高地。
-    p.setPen(QColor("#BDCBD5"));
-    p.setBrush(QColor("#F4F8FA"));
-    p.drawRoundedRect(field, 6, 6);
-    const QPointF center = maptf::toPixels(QPointF(0.5, 0.5), field);
-    p.setPen(QPen(QColor("#DAE2E8"), 1, Qt::DashLine));
-    p.drawLine(QPointF(center.x(), field.top()), QPointF(center.x(), field.bottom()));
-    p.setPen(QPen(QColor("#DAE2E8"), 1));
-    p.setBrush(QColor("#EAF1F5"));
-    p.drawRoundedRect(QRectF(center.x() - field.width() * 0.09, center.y() - field.height() * 0.16,
-                             field.width() * 0.18, field.height() * 0.32), 4, 4);
-
-    // 基地与前哨站示意：只表示端别与前后关系，具体血量见比分条。
-    const auto &unit = match->unitStatus;
-    const bool hasUnit = match->ageMs(MatchState::Domain::UnitStatus) >= 0;
-    for (int side = 0; side < 2; ++side) {
-        const bool enemy = side == 1;
-        const double end = endIndex(allyBlue, enemy);
-        const QColor color = teamColor(enemy);
-        const bool invincible = hasUnit && (enemy ? unit.has_enemy_base_status() : unit.has_base_status())
-            && (enemy ? unit.enemy_base_status() : unit.base_status()) == 0;
-        const int outpostState = hasUnit && (enemy ? unit.has_enemy_outpost_status() : unit.has_outpost_status())
-            ? int(enemy ? unit.enemy_outpost_status() : unit.outpost_status()) : -1;
-        const double outpostX = maptf::kFieldLengthM - kOutpostDistM;
-        p.setPen(QPen(color, 1.5, invincible ? Qt::DashLine : Qt::SolidLine));
-        p.setBrush(outpostState >= 3 ? QColor("#E3EAF0") : color);
-        p.drawRect(QRectF(pixel(end * outpostX + (1 - end) * kOutpostDistM, maptf::kFieldWidthM / 2) - QPointF(5, 5),
-                          QSizeF(10, 10)));
-        p.setBrush(color);
-        p.drawRect(QRectF(pixel(end * (maptf::kFieldLengthM - kBaseDistM) + (1 - end) * kBaseDistM,
-                                maptf::kFieldWidthM / 2) - QPointF(7, 7), QSizeF(14, 14)));
+    // 底图：按控件尺寸缓存缩放结果，蓝方视角预先旋转 180°。
+    if (bitmap.isNull()) bitmap = loadFieldMap();
+    const QSize key = field.size().toSize();
+    if (renderedKey != key || renderedBlue != allyBlue) {
+        renderedKey = key;
+        renderedBlue = allyBlue;
+        rendered = QPixmap();
+        if (!bitmap.isNull() && key.width() > 0 && key.height() > 0) {
+            QPixmap scaled = bitmap.scaled(key, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            if (allyBlue) scaled = scaled.transformed(QTransform().rotate(180), Qt::SmoothTransformation);
+            rendered = scaled;
+        }
     }
-
-    // 点位：本机带朝向；雷达点位在高亮时加环，过期整体半透明。
+    QPainterPath clip;
+    clip.addRoundedRect(field, 6, 6);
+    p.save();
+    p.setClipPath(clip);
+    if (rendered.isNull()) p.fillRect(field, QColor("#F4F8FA"));
+    else p.drawPixmap(field.topLeft(), rendered);
+    // 过期时压低底图对比度，突出"当前没有实时位置"。
     const bool positionStale = match->isStale(MatchState::Domain::Position);
     const bool radarStale = match->isStale(MatchState::Domain::Radar);
+    if (hasAnyData() && positionStale && radarStale) p.fillRect(field, QColor(255, 255, 255, 130));
+    p.restore();
+    p.setPen(QColor("#BDCBD5"));
+    p.setBrush(Qt::NoBrush);
+    p.drawRoundedRect(field, 6, 6);
+
+    // 点位：本机带朝向；雷达点位在高亮时加环，过期整体半透明。
     const auto list = markers();
     for (const auto &marker : list) {
         const QPointF point = maptf::toPixels(maptf::forView(marker.normalized, allyBlue), field);
@@ -160,7 +151,7 @@ void MinimapPanel::paintEvent(QPaintEvent *) {
     if (!hasAnyData()) note = "等待位置数据";
     else if (positionStale && radarStale) note = "位置数据已过期 · 仅显示最后已知位置";
     else if (radarStale) note = "雷达数据过期 · 点位为最后已知位置";
-    else note = QString("点位 %1 · 底图为示意").arg(list.size());
+    else note = QString("点位 %1 · 官方场地底图").arg(list.size());
     p.setFont(theme::font(10));
     p.setPen(muted);
     p.drawText(footer, Qt::AlignLeft | Qt::AlignVCenter, note);

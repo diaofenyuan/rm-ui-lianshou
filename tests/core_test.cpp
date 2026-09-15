@@ -215,19 +215,21 @@ private slots:
 
         const QRectF field(0, 0, 280, 150);
         QCOMPARE(toPixels(QPointF(0.5, 0.5), field), QPointF(140, 75));
-        QCOMPARE(toPixels(QPointF(0, 0), field), QPointF(0, 0));
+        // 底图红方端在左、+Y 朝上：坐标原点落在左下角，红方停机坪在左上角。
+        QCOMPARE(toPixels(QPointF(0, 0), field), QPointF(0, 150));
+        QCOMPARE(toPixels(QPointF(0, 1), field), QPointF(0, 0));
 
         // 蓝方视角为 180° 旋转，红方视角保持世界坐标。
         QCOMPARE(forView(QPointF(0.25, 0.75), false), QPointF(0.25, 0.75));
         QCOMPARE(forView(QPointF(0.25, 0.75), true), QPointF(0.75, 0.25));
-        // 正北（+Y）在画布上向下，正东（+X）向右；蓝方视角整体再旋转 180°。
-        QCOMPARE(yawToCanvasDegrees(0, false), 90.0);
+        // 正北（+Y）在底图上朝上，正东（+X）朝右；蓝方视角整体再旋转 180°。
+        QCOMPARE(yawToCanvasDegrees(0, false), 270.0);
         QCOMPARE(yawToCanvasDegrees(90, false), 0.0);
-        QCOMPARE(yawToCanvasDegrees(180, false), 270.0);
+        QCOMPARE(yawToCanvasDegrees(180, false), 90.0);
         QCOMPARE(yawToCanvasDegrees(270, false), 180.0);
-        QCOMPARE(yawToCanvasDegrees(0, true), 270.0);
+        QCOMPARE(yawToCanvasDegrees(0, true), 90.0);
         QCOMPARE(yawToCanvasDegrees(90, true), 180.0);
-        QCOMPARE(yawToCanvasDegrees(360, false), 90.0);
+        QCOMPARE(yawToCanvasDegrees(360, false), 270.0);
     }
     void matchStateAggregates() {
         MatchState m;

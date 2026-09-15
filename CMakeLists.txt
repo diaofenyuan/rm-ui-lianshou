@@ -17,6 +17,7 @@ FetchContent_Declare(paho URL https://codeload.github.com/eclipse-paho/paho.mqtt
 FetchContent_MakeAvailable(protobuf paho)
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Network Test)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
 add_custom_command(OUTPUT
     generated/game_status.pb.cc generated/game_status.pb.h
@@ -33,7 +34,7 @@ add_library(rm_core src/status.cpp src/assembler.cpp src/receiver.cpp src/video.
 target_include_directories(rm_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(rm_core PUBLIC PAHO_MQTT_STATIC=1)
 target_link_libraries(rm_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network protobuf::libprotobuf paho-mqtt3a-static)
-add_executable(rm_client src/main.cpp src/window.cpp src/window.h
+add_executable(rm_client src/main.cpp src/window.cpp src/window.h resources.qrc
   src/ui/console_page.cpp src/ui/console_page.h
   src/ui/score_bar.cpp src/ui/score_bar.h
   src/ui/minimap.cpp src/ui/minimap.h

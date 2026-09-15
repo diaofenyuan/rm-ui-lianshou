@@ -32,7 +32,9 @@ QRectF fieldRect(const QRectF &area) {
 }
 
 QPointF toPixels(const QPointF &normalized, const QRectF &field) {
-    return {field.x() + normalized.x() * field.width(), field.y() + normalized.y() * field.height()};
+    // 底图以红方端为左、+Y 朝上，屏幕 Y 轴向下，因此 Y 取反。
+    return {field.x() + normalized.x() * field.width(),
+            field.y() + (1 - normalized.y()) * field.height()};
 }
 
 QPointF forView(const QPointF &normalized, bool allyBlue) {
@@ -41,8 +43,8 @@ QPointF forView(const QPointF &normalized, bool allyBlue) {
 }
 
 double yawToCanvasDegrees(double yawDeg, bool allyBlue) {
-    // 正北（协议未指明对应轴，当前按 +Y 实现）→ 画布向下；东（+X）→ 画布向右。
-    double degrees = 90.0 - yawDeg + (allyBlue ? 180.0 : 0.0);
+    // 正北（协议未指明对应轴，当前按 +Y 实现）在底图上朝上，正东（+X）朝右。
+    double degrees = yawDeg - 90.0 + (allyBlue ? 180.0 : 0.0);
     degrees = std::fmod(degrees, 360.0);
     return degrees < 0 ? degrees + 360.0 : degrees;
 }

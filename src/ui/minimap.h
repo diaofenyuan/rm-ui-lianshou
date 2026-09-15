@@ -1,11 +1,12 @@
 #pragma once
 #include "match_state.h"
 #include <QPointF>
+#include <QPixmap>
 #include <QVector>
 #include <QWidget>
 
-// 战术地图：自绘示意底图 + 双方点位。
-// 点位来源为雷达（触发式，双方槽位）与本机 RobotPosition（含朝向），底图区域为示意画法，
+// 战术地图：官方场地底图 + 双方点位。
+// 点位来源为雷达（触发式，双方槽位）与本机 RobotPosition（含朝向），
 // 坐标口径与降级规则见 docs/console-design.md。协议未提供的数据一律不绘制。
 class MinimapPanel : public QWidget {
 public:
@@ -29,4 +30,8 @@ private:
     MatchState *match;
     bool allyBlue = false;
     int ownNumber = 0;
+    mutable QPixmap bitmap;              // 延迟加载的底图原图
+    mutable QPixmap rendered;            // 按控件尺寸与视角缓存的底图
+    mutable QSize renderedKey;
+    mutable bool renderedBlue = false;
 };
