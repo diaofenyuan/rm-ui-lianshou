@@ -27,7 +27,8 @@ add_custom_command(OUTPUT
     ${CMAKE_CURRENT_SOURCE_DIR}/proto/rm_messages.proto
   DEPENDS protobuf::protoc proto/game_status.proto proto/rm_messages.proto VERBATIM)
 add_library(rm_core src/status.cpp src/assembler.cpp src/receiver.cpp src/video.cpp src/match_state.cpp
-  src/status.h src/assembler.h src/receiver.h src/video.h src/match_state.h
+  src/map_transform.cpp
+  src/status.h src/assembler.h src/receiver.h src/video.h src/match_state.h src/map_transform.h
   generated/game_status.pb.cc generated/rm_messages.pb.cc)
 target_include_directories(rm_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(rm_core PUBLIC PAHO_MQTT_STATIC=1)
@@ -35,6 +36,7 @@ target_link_libraries(rm_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network protobuf::l
 add_executable(rm_client src/main.cpp src/window.cpp src/window.h
   src/ui/console_page.cpp src/ui/console_page.h
   src/ui/score_bar.cpp src/ui/score_bar.h
+  src/ui/minimap.cpp src/ui/minimap.h
   src/ui/robot_list.cpp src/ui/robot_list.h src/ui/console_panel.h)
 target_link_libraries(rm_client PRIVATE rm_core Qt6::Widgets)
 add_executable(rm_receive src/receive_main.cpp)

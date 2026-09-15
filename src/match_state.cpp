@@ -12,7 +12,7 @@ void MatchState::reset() {
     game = {}; unitStatus = {}; logistics = {}; mechanisms = {}; respawn = {}; injury = {};
     robotStatic = {}; robotDynamic = {}; robotModule = {}; position = {}; penalty = {}; radar = {};
     gameAt = unitStatusAt = logisticsAt = mechanismsAt = respawnAt = injuryAt = -1;
-    robotStaticAt = robotDynamicAt = robotModuleAt = positionAt = penaltyAt = -1;
+    robotStaticAt = robotDynamicAt = robotModuleAt = positionAt = radarAt = penaltyAt = -1;
     eventLog.clear(); activeBuffs.clear();
     emit stateReset();
 }
@@ -31,6 +31,7 @@ qint64 MatchState::ageMs(Domain domain) const {
         case Domain::RobotDynamic: at = robotDynamicAt; break;
         case Domain::RobotModule: at = robotModuleAt; break;
         case Domain::Position: at = positionAt; break;
+        case Domain::Radar: at = radarAt; break;
         case Domain::Penalty: at = penaltyAt; break;
     }
     return at < 0 ? -1 : clock.elapsed() - at;
@@ -54,13 +55,14 @@ void MatchState::applyRespawn(const rm::RobotRespawnStatus &value) { respawn = v
 void MatchState::applyStatic(const rm::RobotStaticStatus &value) { robotStatic = value; stamp(robotStaticAt); emit robotStaticChanged(); }
 void MatchState::applyDynamic(const rm::RobotDynamicStatus &value) { robotDynamic = value; stamp(robotDynamicAt); emit robotDynamicChanged(); }
 void MatchState::applyModule(const rm::RobotModuleStatus &value) { robotModule = value; stamp(robotModuleAt); emit robotModuleChanged(); }
-void MatchState::applyPosition(const rm::RobotPosition &value) { position = value; stamp(positionAt); emit positionChanged(); }
-void MatchState::applyPenalty(const rm::PenaltyInfo &value) { penalty = value; stamp(penaltyAt); emit penaltyChanged(); }
-void MatchState::applyRadar(const rm::RadarInfoToClient &value) { radar = value; emit radarChanged(); }
+void MatchState::applyPosition(const rm::RobotPosition &value) { position = value; ++positionMessages; stamp(positionAt); emit positionChanged(); }
+void MatchState::applyPenalty(const rm::PenaltyInfo &value) { penalty = value; ++penaltyMessages; stamp(penaltyAt); emit penaltyChanged(); }
+void MatchState::applyRadar(const rm::RadarInfoToClient &value) { radar = value; ++radarMessages; stamp(radarAt); emit radarChanged(); }
 
 void MatchState::applyEvent(const rm::Event &value) {
     TimedEvent entry; entry.at = clock.elapsed(); entry.event = value;
     eventLog.append(entry);
+    ++eventMessages;
     while (eventLog.size() > kEventLogLimit) eventLog.removeFirst();
     emit eventAppended();
 }

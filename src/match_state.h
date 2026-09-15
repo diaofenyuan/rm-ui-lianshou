@@ -17,9 +17,9 @@ public:
     void reset();
 
     // 各数据域的时效阈值（毫秒）：5/10Hz 域 1.5 秒，1Hz 域 3 秒；
-    // Event/Buff/Radar 为触发式，不参与过期判定。
+    // Event/Buff 为触发式，不参与过期判定；位置与雷达按 1Hz 域口径判断。
     enum class Domain { Game, UnitStatus, Logistics, SpecialMechanism, Respawn,
-        Injury, RobotStatic, RobotDynamic, RobotModule, Position, Penalty };
+        Injury, RobotStatic, RobotDynamic, RobotModule, Position, Radar, Penalty };
     qint64 ageMs(Domain domain) const;   // 距该域最近一次更新的毫秒数；从未收到返回 -1
     bool isStale(Domain domain) const;   // 从未收到或超过该域阈值
 
@@ -40,6 +40,9 @@ public:
     struct TimedBuff { qint64 at = 0; rm::Buff buff; };
     const QVector<TimedEvent> &events() const { return eventLog; }
     const QVector<TimedBuff> &buffs() const { return activeBuffs; }
+
+    // 累计接收计数，供界面证据与排障使用；不随 reset() 归零。
+    quint64 positionMessages = 0, radarMessages = 0, eventMessages = 0, penaltyMessages = 0;
 
     // GlobalUnitStatus.robot_health 固定顺序（协议 2.2.4）：索引 0–4 为己方 1/2/3/4/7 号，5–9 为对方 1/2/3/4/7 号。
     static constexpr int kSideHealthCount = 5;
@@ -87,7 +90,7 @@ private:
     QElapsedTimer clock;
     qint64 gameAt = -1, unitStatusAt = -1, logisticsAt = -1, mechanismsAt = -1, respawnAt = -1,
         injuryAt = -1, robotStaticAt = -1, robotDynamicAt = -1, robotModuleAt = -1,
-        positionAt = -1, penaltyAt = -1;
+        positionAt = -1, radarAt = -1, penaltyAt = -1;
     QVector<TimedEvent> eventLog;
     QVector<TimedBuff> activeBuffs;
     qint64 stamp(qint64 &target);

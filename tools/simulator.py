@@ -134,16 +134,31 @@ def robot_respawn(elapsed):
 
 
 def robot_position(elapsed, robot_id):
+    # 世界坐标系与量纲见 docs/console-design.md：X 沿长边指向蓝方，Y 指向红方停机坪，单位米。
+    # 本机在己方半场做小范围机动，便于观察小地图的视角与降级行为。
+    home = 19.0 if robot_id > 100 else 8.0
     angle = elapsed * 0.4
-    return rm_messages_pb2.RobotPosition(x=4.0 + 2.0 * math.cos(angle), y=3.0 + 2.0 * math.sin(angle),
+    return rm_messages_pb2.RobotPosition(x=home + 2.2 * math.cos(angle), y=5.0 + 3.5 * math.sin(angle),
         z=0.0, yaw=math.degrees(angle) % 360, robot_id=robot_id)
 
 
-def radar_info(elapsed):
-    infos = [rm_messages_pb2.RadarSingleRobotInfo(
-        target_pos_x=int((4.0 + 2.5 * math.cos(elapsed * 0.4 + i * 0.5)) * 100),
-        target_pos_y=int((3.0 + 2.5 * math.sin(elapsed * 0.4 + i * 0.5)) * 100),
-        is_high_light=i % 3) for i in range(12)]
+def radar_slot(elapsed, index, enemy, ally_blue):
+    # 对方 1/2/3/4/6/7 号与己方同编号各占半场：对方压向我方半场一侧，己方在自己半场活动。
+    enemy_home = 7.0 if ally_blue else 21.0
+    ally_home = 21.0 if ally_blue else 7.0
+    home = enemy_home if enemy else ally_home
+    spread = (index - 2.5) * 1.6
+    angle = elapsed * 0.5 + index * 0.6
+    return (int((home + 2.6 * math.cos(angle)) * 100), int((7.5 + spread * 0.5 + 2.0 * math.sin(angle)) * 100))
+
+
+def radar_info(elapsed, ally_blue):
+    infos = []
+    for enemy in (True, False):
+        for index in range(6):
+            x_cm, y_cm = radar_slot(elapsed, index, enemy, ally_blue)
+            infos.append(rm_messages_pb2.RadarSingleRobotInfo(
+                target_pos_x=x_cm, target_pos_y=y_cm, is_high_light=1 if enemy and index % 3 == 0 else 0))
     return rm_messages_pb2.RadarInfoToClient(robot_info=infos)
 
 
@@ -196,7 +211,7 @@ async def run(args):
                         ("RobotInjuryStat", injury_stat(t)),
                         ("RobotRespawnStatus", robot_respawn(t)),
                         ("RobotPosition", robot_position(t, args.robot_id)),
-                        ("RadarInfoToClient", radar_info(t)),
+                        ("RadarInfoToClient", radar_info(t, args.robot_id > 100)),
                         ("Buff", active_buff(t, args.robot_id)),
                     ):
                         payload = message.SerializeToString()

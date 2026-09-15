@@ -36,14 +36,16 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     allyPanel->setMinimumWidth(225);
     auto *enemyPanel = new ConsolePanel("敌方机器人", enemy, enemySummary);
     enemyPanel->setMinimumWidth(225);
-    auto *minimap = new ConsolePanel("战术地图",
-        hint("小地图与位置渲染在阶段 3 接入：己方/敌方位置、朝向、高亮与数据过期降级。"));
-    minimap->setMinimumWidth(140);
+    minimap = new MinimapPanel(match);
+    auto *source = new QLabel("点位：雷达 / 本机测速模块");
+    source->setProperty("role", "muted");
+    auto *minimapPanel = new ConsolePanel("战术地图", minimap, source);
+    minimapPanel->setMinimumWidth(260);
     auto *respawn = new ConsolePanel("复活状态",
         hint("复活读条、金币/免费复活提示在阶段 4 接入（RobotRespawnStatus 已接入数据层）。"));
     auto *center = new QVBoxLayout;
     center->setSpacing(12);
-    center->addWidget(minimap, 1);
+    center->addWidget(minimapPanel, 1);
     center->addWidget(respawn);
     grid->addLayout(center, 0, 1);
     grid->addWidget(allyPanel, 0, 0);
@@ -71,6 +73,8 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     connect(match, &MatchState::robotStaticChanged, this, refreshNow);
     connect(match, &MatchState::robotDynamicChanged, this, refreshNow);
     connect(match, &MatchState::robotModuleChanged, this, refreshNow);
+    connect(match, &MatchState::positionChanged, this, refreshNow);
+    connect(match, &MatchState::radarChanged, this, refreshNow);
     connect(match, &MatchState::stateReset, this, refreshNow);
     ticker.setInterval(200);
     connect(&ticker, &QTimer::timeout, this, refreshNow);
@@ -82,6 +86,7 @@ void ConsolePage::setRobot(int id) {
     bar->setAllyBlue(id > 100);
     ally->setOwnRobot(id);
     enemy->setOwnRobot(id);
+    minimap->setOwnRobot(id);
     refresh();
 }
 
@@ -91,4 +96,5 @@ void ConsolePage::refresh() {
     bar->update();
     ally->update();
     enemy->update();
+    minimap->update();
 }

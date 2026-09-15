@@ -1,5 +1,6 @@
 #include "assembler.h"
 #include "match_state.h"
+#include "map_transform.h"
 #include "status.h"
 #include "operator_profile.h"
 #include <QtTest>
@@ -182,6 +183,51 @@ private slots:
         rm::Event kill; kill.set_event_id(1); kill.set_param("1,101");
         QCOMPARE(status::json(kill)["message_type"].toString(), QString("Event"));
         QVERIFY(status::json(kill)["event_text"].toString().contains("击毁"));
+    }
+    void mapTransform() {
+        using namespace maptf;
+        QCOMPARE(normalize(0.0, 0.0), QPointF(0, 0));
+        QCOMPARE(normalize(kFieldLengthM, kFieldWidthM), QPointF(1, 1));
+        QCOMPARE(normalize(14.0, 7.5), QPointF(0.5, 0.5));
+        // 雷达按厘米下发，换算到同一归一化口径。
+        QCOMPARE(normalizeRadar(1400, 750), QPointF(0.5, 0.5));
+        QCOMPARE(normalizeRadar(2800, 1500), QPointF(1, 1));
+        QCOMPARE(normalizeRadar(0, 0), QPointF(0, 0));
+
+        QVERIFY(plausible(0.0, 0.0));
+        QVERIFY(plausible(kFieldLengthM, kFieldWidthM));
+        QVERIFY(plausible(-0.5, 7.0));
+        QVERIFY(!plausible(-2.0, 7.0));
+        QVERIFY(!plausible(30.0, 7.0));
+        QVERIFY(!plausible(14.0, 17.0));
+        QCOMPARE(clamped(QPointF(1.2, -0.3)), QPointF(1, 0));
+
+        // 28:15 取景：先按宽度铺满，超出高度时改为按高度取景并水平居中。
+        const QRectF wide = fieldRect(QRectF(0, 0, 2000, 300));
+        QVERIFY(qAbs(wide.height() - 300) < 0.01);
+        QVERIFY(qAbs(wide.width() - 300 * 28.0 / 15.0) < 0.01);
+        QVERIFY(qAbs(wide.x() - (2000 - wide.width()) / 2) < 0.01);
+        const QRectF tall = fieldRect(QRectF(0, 0, 1000, 500));
+        QVERIFY(qAbs(tall.width() - 500 * 28.0 / 15.0) < 0.01);
+        QVERIFY(qAbs(tall.height() - 500) < 0.01);
+        QVERIFY(qAbs(tall.y()) < 0.01);
+        QVERIFY(fieldRect(QRectF()).isEmpty());
+
+        const QRectF field(0, 0, 280, 150);
+        QCOMPARE(toPixels(QPointF(0.5, 0.5), field), QPointF(140, 75));
+        QCOMPARE(toPixels(QPointF(0, 0), field), QPointF(0, 0));
+
+        // 蓝方视角为 180° 旋转，红方视角保持世界坐标。
+        QCOMPARE(forView(QPointF(0.25, 0.75), false), QPointF(0.25, 0.75));
+        QCOMPARE(forView(QPointF(0.25, 0.75), true), QPointF(0.75, 0.25));
+        // 正北（+Y）在画布上向下，正东（+X）向右；蓝方视角整体再旋转 180°。
+        QCOMPARE(yawToCanvasDegrees(0, false), 90.0);
+        QCOMPARE(yawToCanvasDegrees(90, false), 0.0);
+        QCOMPARE(yawToCanvasDegrees(180, false), 270.0);
+        QCOMPARE(yawToCanvasDegrees(270, false), 180.0);
+        QCOMPARE(yawToCanvasDegrees(0, true), 270.0);
+        QCOMPARE(yawToCanvasDegrees(90, true), 180.0);
+        QCOMPARE(yawToCanvasDegrees(360, false), 90.0);
     }
     void matchStateAggregates() {
         MatchState m;
