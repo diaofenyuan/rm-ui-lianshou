@@ -231,6 +231,77 @@ private slots:
         QCOMPARE(yawToCanvasDegrees(90, true), 180.0);
         QCOMPARE(yawToCanvasDegrees(360, false), 270.0);
     }
+    void consoleTimeline() {
+        MatchState m;
+        rm::GameStatus base;
+        base.set_current_stage(4); base.set_red_score(0); base.set_is_paused(false);
+        m.applyGame(base);
+        QVERIFY(m.timeline().isEmpty());                 // 首帧只建立基线
+        m.applyGame(base);
+        QVERIFY(m.timeline().isEmpty());                 // 重复消息不入队
+        rm::GameStatus paused = base;
+        paused.set_is_paused(true);
+        m.applyGame(paused);
+        QCOMPARE(m.timeline().size(), 1);
+        QCOMPARE(m.timeline().last().text, QString("比赛暂停"));
+        QVERIFY(m.timeline().last().category == MatchState::Category::Match);
+
+        rm::GlobalUnitStatus unit;
+        for (int i = 0; i < 10; ++i) unit.add_robot_health(quint32(100));
+        m.applyUnitStatus(unit);
+        QCOMPARE(m.timeline().size(), 1);                // 首次血量只建立基线
+        unit.set_robot_health(0, 0);                     // 对方 1 号被击毁
+        unit.set_robot_health(6, 0);                     // 我方 2 号被击毁
+        m.applyUnitStatus(unit);
+        QCOMPARE(m.timeline().size(), 3);
+        QVERIFY(m.timeline().last().text.startsWith("我方 2 号"));
+        QVERIFY(m.timeline().last().alert);
+        unit.set_robot_health(6, 200);                   // 我方 2 号复活
+        m.applyUnitStatus(unit);
+        QVERIFY(m.timeline().last().text.endsWith("复活"));
+
+        rm::PenaltyInfo penalty;
+        penalty.set_penalty_type(4); penalty.set_penalty_effect_sec(5); penalty.set_total_penalty_num(1);
+        m.applyPenalty(penalty);
+        QCOMPARE(m.timeline().last().text, QString("判罚：超功率，持续 5 秒，累计 1 次"));
+
+        rm::GlobalSpecialMechanism mechanism;
+        mechanism.add_mechanism_id(1); mechanism.add_mechanism_time_sec(20);
+        m.applySpecialMechanism(mechanism);
+        QVERIFY(!m.timeline().last().text.contains("堡垒"));   // 首次机制只建立基线
+        const int baseline = m.timeline().size();
+        mechanism.set_mechanism_time_sec(0, 15);
+        m.applySpecialMechanism(mechanism);
+        QCOMPARE(m.timeline().size(), baseline);               // 同一机制不重复入队
+        mechanism.clear_mechanism_id(); mechanism.clear_mechanism_time_sec();
+        m.applySpecialMechanism(mechanism);
+        QVERIFY(m.timeline().last().text.contains("结束"));
+
+        rm::RobotModuleStatus module;
+        module.set_main_controller(1);
+        m.applyModule(module);
+        const int before = m.timeline().size();
+        module.set_main_controller(0);
+        m.applyModule(module);
+        QCOMPARE(m.timeline().size(), before + 1);
+        QCOMPARE(m.timeline().last().text, QString("模块离线：主控"));
+        module.set_main_controller(1);
+        m.applyModule(module);
+        QCOMPARE(m.timeline().last().text, QString("模块恢复：主控"));
+
+        rm::RobotRespawnStatus respawn;
+        respawn.set_is_pending_respawn(false);
+        m.applyRespawn(respawn);
+        respawn.set_is_pending_respawn(true);
+        m.applyRespawn(respawn);
+        QCOMPARE(m.timeline().last().text, QString("进入复活读条"));
+
+        QCOMPARE(status::mechanismText(1, 20), QString("己方堡垒被对方占领，剩余 20 秒"));
+        QVERIFY(status::mechanismText(9, 3).contains("9"));
+        QVERIFY(!m.timeline().isEmpty());
+        m.reset();
+        QVERIFY(m.timeline().isEmpty());
+    }
     void matchStateAggregates() {
         MatchState m;
         QVERIFY(m.isStale(MatchState::Domain::UnitStatus));

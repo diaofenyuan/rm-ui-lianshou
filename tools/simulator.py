@@ -109,10 +109,12 @@ def robot_dynamic(elapsed):
         can_remote_heal=True, can_remote_ammo=True)
 
 
-def robot_module(_elapsed):
+def robot_module(elapsed):
+    # 每个 60 秒周期末端让主控与图传短暂离线，用于观察模块离线提醒。
+    offline = 40 <= int(elapsed) % 60 < 45
     return rm_messages_pb2.RobotModuleStatus(power_manager=1, rfid=0, light_strip=1,
-        small_shooter=1, big_shooter=0, uwb=0, armor=1, video_transmission=1,
-        capacitor=1, main_controller=1, laser_detection_module=1)
+        small_shooter=1, big_shooter=0, uwb=0, armor=1, video_transmission=0 if offline else 1,
+        capacitor=1, main_controller=2 if offline else 1, laser_detection_module=1)
 
 
 def injury_stat(elapsed):
@@ -162,8 +164,18 @@ def radar_info(elapsed, ally_blue):
     return rm_messages_pb2.RadarInfoToClient(robot_info=infos)
 
 
-def kill_event():
-    return rm_messages_pb2.Event(event_id=1, param="1,101")
+def next_event(index, ally_blue):
+    # 轮换若干事件编号，覆盖时间线上的普通条目与提醒条目；参数格式见协议 2.2.7。
+    outpost = "11" if ally_blue else "111"   # 2 号事件：先给被摧毁的是对方前哨站
+    cycle = (
+        rm_messages_pb2.Event(event_id=1, param="3,101"),      # 击杀
+        rm_messages_pb2.Event(event_id=11, param=""),          # 己方基地遭到攻击
+        rm_messages_pb2.Event(event_id=2, param=outpost),      # 对方前哨站被摧毁
+        rm_messages_pb2.Event(event_id=9, param="2,4"),        # 飞镖命中基地随机移动目标
+        rm_messages_pb2.Event(event_id=7, param=""),           # 对方呼叫空中支援
+        rm_messages_pb2.Event(event_id=4, param="2"),          # 大能量机关进入已激活状态
+    )
+    return cycle[index % len(cycle)]
 
 
 def active_buff(elapsed, robot_id):
@@ -219,8 +231,8 @@ async def run(args):
                     if int(t) % 37 == 36:
                         penalty = rm_messages_pb2.PenaltyInfo(penalty_type=4, penalty_effect_sec=5, total_penalty_num=1)
                         publisher.publish("PenaltyInfo", penalty.SerializeToString(), qos=1)
-                if tick % 250 == 125:
-                    publisher.publish("Event", kill_event().SerializeToString(), qos=1)
+                if tick % 80 == 40:
+                    publisher.publish("Event", next_event(tick // 80, args.robot_id > 100).SerializeToString(), qos=1)
             tick += 1
             await asyncio.sleep(0.1)
 

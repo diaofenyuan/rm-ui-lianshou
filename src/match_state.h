@@ -41,6 +41,18 @@ public:
     const QVector<TimedEvent> &events() const { return eventLog; }
     const QVector<TimedBuff> &buffs() const { return activeBuffs; }
 
+    // 统一事件时间线：协议事件、判罚、机制，以及由状态变化推导的条目。
+    // 只记录已确认的变化，重复消息不入队；推导逻辑集中在此处便于单测。
+    enum class Category { Match, Robot, Mechanism, Penalty, Event };
+    struct TimelineEntry {
+        qint64 at = 0;                  // 距 MatchState 创建的毫秒数
+        QString stamp;                  // 追加时刻（本机时间 HH:mm:ss）
+        Category category = Category::Match;
+        QString text;
+        bool alert = false;             // 需要突出显示的提醒
+    };
+    const QVector<TimelineEntry> &timeline() const { return entries; }
+
     // 累计接收计数，供界面证据与排障使用；不随 reset() 归零。
     quint64 positionMessages = 0, radarMessages = 0, eventMessages = 0, penaltyMessages = 0;
 
@@ -85,6 +97,7 @@ signals:
     void radarChanged();
     void buffsChanged();
     void eventAppended();
+    void timelineChanged();
 
 private:
     QElapsedTimer clock;
@@ -93,6 +106,9 @@ private:
         positionAt = -1, radarAt = -1, penaltyAt = -1;
     QVector<TimedEvent> eventLog;
     QVector<TimedBuff> activeBuffs;
+    QVector<TimelineEntry> entries;
+    void appendTimeline(Category category, const QString &text, bool alert = false);
+    void recordHealthChanges(const rm::GlobalUnitStatus &value);
     qint64 stamp(qint64 &target);
 };
 Q_DECLARE_METATYPE(rm::GlobalUnitStatus)

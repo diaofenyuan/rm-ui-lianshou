@@ -1,10 +1,44 @@
 #include "match_state.h"
+#include "operator_profile.h"
+#include <QPair>
+#include <QSet>
+#include <QTime>
+#include <optional>
 
 namespace {
 constexpr qint64 kFastStaleMs = 1500;   // GameStatus 5Hz、RobotDynamicStatus 10Hz
 constexpr qint64 kSlowStaleMs = 3000;   // 1Hz 域
 constexpr int kEventLogLimit = 200;
 constexpr int kBuffLimit = 32;
+constexpr int kTimelineLimit = 300;
+
+// GlobalUnitStatus.robot_health 槽位编号（协议 2.2.4）：前 5 项对方、后 5 项己方。
+constexpr int kHealthSlots[5] = {1, 2, 3, 4, 7};
+QString slotName(int index) {
+    const bool enemy = index < 5;
+    const int number = kHealthSlots[index % 5];
+    return QString("%1 %2 号%3").arg(enemy ? "对方" : "我方").arg(number)
+        .arg(QString::fromUtf8(profile::roles[number - 1].name));
+}
+
+// RobotModuleStatus 各模块字段：字段名与取值，未提供的字段返回 nullopt 以便跳过比较。
+using ModuleField = QPair<QString, std::optional<quint32>>;
+QVector<ModuleField> moduleStates(const rm::RobotModuleStatus &v) {
+    const auto field = [](const QString &name, bool present, quint32 value) {
+        return qMakePair(name, present ? std::optional<quint32>(value) : std::nullopt);
+    };
+    return {field("电源管理", v.has_power_manager(), v.power_manager()),
+        field("RFID", v.has_rfid(), v.rfid()),
+        field("灯带", v.has_light_strip(), v.light_strip()),
+        field("17mm 发射机构", v.has_small_shooter(), v.small_shooter()),
+        field("42mm 发射机构", v.has_big_shooter(), v.big_shooter()),
+        field("定位模块", v.has_uwb(), v.uwb()),
+        field("装甲", v.has_armor(), v.armor()),
+        field("图传", v.has_video_transmission(), v.video_transmission()),
+        field("超级电容", v.has_capacitor(), v.capacitor()),
+        field("主控", v.has_main_controller(), v.main_controller()),
+        field("激光检测模块", v.has_laser_detection_module(), v.laser_detection_module())};
+}
 }
 
 MatchState::MatchState(QObject *parent) : QObject(parent) { clock.start(); }
@@ -13,7 +47,7 @@ void MatchState::reset() {
     robotStatic = {}; robotDynamic = {}; robotModule = {}; position = {}; penalty = {}; radar = {};
     gameAt = unitStatusAt = logisticsAt = mechanismsAt = respawnAt = injuryAt = -1;
     robotStaticAt = robotDynamicAt = robotModuleAt = positionAt = radarAt = penaltyAt = -1;
-    eventLog.clear(); activeBuffs.clear();
+    eventLog.clear(); activeBuffs.clear(); entries.clear();
     emit stateReset();
 }
 qint64 MatchState::stamp(qint64 &target) { return target = clock.elapsed(); }
@@ -46,17 +80,93 @@ bool MatchState::isStale(Domain domain) const {
     }
 }
 
-void MatchState::applyGame(const rm::GameStatus &value) { game = value; stamp(gameAt); emit gameChanged(); }
-void MatchState::applyUnitStatus(const rm::GlobalUnitStatus &value) { unitStatus = value; stamp(unitStatusAt); emit unitStatusChanged(); }
+void MatchState::appendTimeline(Category category, const QString &text, bool alert) {
+    if (text.isEmpty()) return;
+    TimelineEntry entry;
+    entry.at = clock.elapsed();
+    entry.stamp = QTime::currentTime().toString("HH:mm:ss");
+    entry.category = category;
+    entry.text = text;
+    entry.alert = alert;
+    entries.append(entry);
+    while (entries.size() > kTimelineLimit) entries.removeFirst();
+    emit timelineChanged();
+}
+
+void MatchState::recordHealthChanges(const rm::GlobalUnitStatus &value) {
+    if (unitStatusAt < 0) return;
+    const int slotCount = qMin(value.robot_health_size(), unitStatus.robot_health_size());
+    for (int i = 0; i < slotCount; ++i) {
+        const quint32 before = unitStatus.robot_health(i), after = value.robot_health(i);
+        if (before == after) continue;
+        if (before > 0 && after == 0) appendTimeline(Category::Robot, QString("%1 被击毁").arg(slotName(i)), true);
+        else if (before == 0 && after > 0) appendTimeline(Category::Robot, QString("%1 复活").arg(slotName(i)));
+    }
+}
+
+void MatchState::applyGame(const rm::GameStatus &value) {
+    if (gameAt >= 0)
+        for (const QString &text : status::changes(game, value))
+            appendTimeline(Category::Match, text, text.contains("结算") || text.contains("暂停"));
+    game = value; stamp(gameAt); emit gameChanged();
+}
+void MatchState::applyUnitStatus(const rm::GlobalUnitStatus &value) {
+    recordHealthChanges(value);
+    unitStatus = value; stamp(unitStatusAt); emit unitStatusChanged();
+}
 void MatchState::applyLogistics(const rm::GlobalLogisticsStatus &value) { logistics = value; stamp(logisticsAt); emit logisticsChanged(); }
-void MatchState::applySpecialMechanism(const rm::GlobalSpecialMechanism &value) { mechanisms = value; stamp(mechanismsAt); emit specialMechanismChanged(); }
+void MatchState::applySpecialMechanism(const rm::GlobalSpecialMechanism &value) {
+    if (mechanismsAt >= 0) {
+        // 机制每秒重发，只记录出现与结束，避免刷屏。
+        QSet<int> before, after;
+        for (int i = 0; i < mechanisms.mechanism_id_size(); ++i) before.insert(int(mechanisms.mechanism_id(i)));
+        for (int i = 0; i < value.mechanism_id_size(); ++i) after.insert(int(value.mechanism_id(i)));
+        for (int id : after) {
+            if (before.contains(id)) continue;
+            qint32 seconds = 0;
+            for (int i = 0; i < value.mechanism_id_size(); ++i)
+                if (int(value.mechanism_id(i)) == id && i < value.mechanism_time_sec_size())
+                    seconds = value.mechanism_time_sec(i);
+            appendTimeline(Category::Mechanism, status::mechanismText(quint32(id), seconds), true);
+        }
+        for (int id : before)
+            if (!after.contains(id)) appendTimeline(Category::Mechanism, QString("特殊机制 %1 结束").arg(id));
+    }
+    mechanisms = value; stamp(mechanismsAt); emit specialMechanismChanged();
+}
 void MatchState::applyInjury(const rm::RobotInjuryStat &value) { injury = value; stamp(injuryAt); emit injuryChanged(); }
-void MatchState::applyRespawn(const rm::RobotRespawnStatus &value) { respawn = value; stamp(respawnAt); emit respawnChanged(); }
+void MatchState::applyRespawn(const rm::RobotRespawnStatus &value) {
+    if (respawnAt >= 0 && respawn.has_is_pending_respawn() && value.has_is_pending_respawn()) {
+        if (!respawn.is_pending_respawn() && value.is_pending_respawn())
+            appendTimeline(Category::Robot, "进入复活读条", true);
+        else if (respawn.is_pending_respawn() && !value.is_pending_respawn())
+            appendTimeline(Category::Robot, "复活读条结束");
+    }
+    respawn = value; stamp(respawnAt); emit respawnChanged();
+}
 void MatchState::applyStatic(const rm::RobotStaticStatus &value) { robotStatic = value; stamp(robotStaticAt); emit robotStaticChanged(); }
 void MatchState::applyDynamic(const rm::RobotDynamicStatus &value) { robotDynamic = value; stamp(robotDynamicAt); emit robotDynamicChanged(); }
-void MatchState::applyModule(const rm::RobotModuleStatus &value) { robotModule = value; stamp(robotModuleAt); emit robotModuleChanged(); }
+void MatchState::applyModule(const rm::RobotModuleStatus &value) {
+    if (robotModuleAt >= 0) {
+        const auto before = moduleStates(robotModule), after = moduleStates(value);
+        for (int i = 0; i < before.size() && i < after.size(); ++i) {
+            if (!before[i].second || !after[i].second) continue;
+            const bool onlineBefore = *before[i].second == 1, onlineAfter = *after[i].second == 1;
+            if (onlineBefore && !onlineAfter) appendTimeline(Category::Robot, QString("模块离线：%1").arg(before[i].first), true);
+            else if (!onlineBefore && onlineAfter) appendTimeline(Category::Robot, QString("模块恢复：%1").arg(before[i].first));
+        }
+    }
+    robotModule = value; stamp(robotModuleAt); emit robotModuleChanged();
+}
 void MatchState::applyPosition(const rm::RobotPosition &value) { position = value; ++positionMessages; stamp(positionAt); emit positionChanged(); }
-void MatchState::applyPenalty(const rm::PenaltyInfo &value) { penalty = value; ++penaltyMessages; stamp(penaltyAt); emit penaltyChanged(); }
+void MatchState::applyPenalty(const rm::PenaltyInfo &value) {
+    QString text = "判罚";
+    if (value.has_penalty_type()) text += QString("：%1").arg(status::penaltyType(value.penalty_type()));
+    if (value.has_penalty_effect_sec()) text += QString("，持续 %1 秒").arg(value.penalty_effect_sec());
+    if (value.has_total_penalty_num()) text += QString("，累计 %1 次").arg(value.total_penalty_num());
+    appendTimeline(Category::Penalty, text, true);
+    penalty = value; ++penaltyMessages; stamp(penaltyAt); emit penaltyChanged();
+}
 void MatchState::applyRadar(const rm::RadarInfoToClient &value) { radar = value; ++radarMessages; stamp(radarAt); emit radarChanged(); }
 
 void MatchState::applyEvent(const rm::Event &value) {
@@ -64,6 +174,14 @@ void MatchState::applyEvent(const rm::Event &value) {
     eventLog.append(entry);
     ++eventMessages;
     while (eventLog.size() > kEventLogLimit) eventLog.removeFirst();
+    // 前哨站、基地、飞镖与空中支援类事件需要提醒；击杀、能量机关等只入时间线。
+    const int id = value.has_event_id() ? value.event_id() : 0;
+    bool alert = false;
+    switch (id) {
+    case 2: case 7: case 9: case 10: case 11: case 12: case 13: case 14: alert = true; break;
+    default: break;
+    }
+    appendTimeline(Category::Event, status::eventText(value), alert);
     emit eventAppended();
 }
 void MatchState::applyBuff(const rm::Buff &value) {

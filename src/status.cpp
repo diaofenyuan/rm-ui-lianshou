@@ -133,6 +133,13 @@ QString buffType(quint32 v) {
     return labeled(v, {"未知", "攻击增益", "防御增益/易伤", "射击热量冷却增益", "底盘功率增益",
         "回血增益", "可兑换允许发弹量", "地形跨越增益（预备）"}, "Buff 类型");
 }
+QString mechanismText(quint32 id, qint32 seconds) {
+    switch (id) {
+    case 1: return QString("己方堡垒被对方占领，剩余 %1 秒").arg(seconds);
+    case 2: return QString("对方堡垒被己方占领，剩余 %1 秒").arg(seconds);
+    default: return QString("特殊机制 %1，剩余 %2 秒").arg(id).arg(seconds);
+    }
+}
 QString eventText(const rm::Event &v) {
     if (!v.has_event_id()) return "事件（未提供编号）";
     const int id = v.event_id();

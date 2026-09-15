@@ -41,8 +41,8 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     source->setProperty("role", "muted");
     auto *minimapPanel = new ConsolePanel("战术地图", minimap, source);
     minimapPanel->setMinimumWidth(260);
-    auto *respawn = new ConsolePanel("复活状态",
-        hint("复活读条、金币/免费复活提示在阶段 4 接入（RobotRespawnStatus 已接入数据层）。"));
+    respawnPanel = new RespawnPanel(match);
+    auto *respawn = new ConsolePanel("复活状态", respawnPanel);
     auto *center = new QVBoxLayout;
     center->setSpacing(12);
     center->addWidget(minimapPanel, 1);
@@ -51,7 +51,13 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     grid->addWidget(allyPanel, 0, 0);
     grid->addWidget(enemyPanel, 0, 2);
 
-    auto *events = new ConsolePanel("战场事件", hint("事件时间线在阶段 4 接入；Event 消息已进入数据层与接收日志。"));
+    timeline = new EventTimelinePanel(match);
+    auto *eventSummary = new QLabel;
+    eventSummary->setProperty("role", "muted");
+    auto *events = new ConsolePanel("战场事件", timeline, eventSummary);
+    connect(match, &MatchState::timelineChanged, eventSummary, [eventSummary, this] {
+        eventSummary->setText(QString("共 %1 条").arg(match->timeline().size()));
+    });
     auto *analysis = new ConsolePanel("数据分析", hint("经济、总伤害与分类伤害统计在阶段 5 接入。"));
     auto *video = new ConsolePanel("图传预览", hint("工业相机画面在阶段 5 接入。"));
     for (auto *panel : {events, analysis, video}) panel->setMinimumHeight(104);
@@ -75,6 +81,7 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     connect(match, &MatchState::robotModuleChanged, this, refreshNow);
     connect(match, &MatchState::positionChanged, this, refreshNow);
     connect(match, &MatchState::radarChanged, this, refreshNow);
+    connect(match, &MatchState::timelineChanged, this, refreshNow);
     connect(match, &MatchState::stateReset, this, refreshNow);
     ticker.setInterval(200);
     connect(&ticker, &QTimer::timeout, this, refreshNow);
@@ -97,4 +104,6 @@ void ConsolePage::refresh() {
     ally->update();
     enemy->update();
     minimap->update();
+    respawnPanel->update();
+    timeline->update();
 }

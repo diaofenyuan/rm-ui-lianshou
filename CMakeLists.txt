@@ -38,6 +38,8 @@ add_executable(rm_client src/main.cpp src/window.cpp src/window.h resources.qrc
   src/ui/console_page.cpp src/ui/console_page.h
   src/ui/score_bar.cpp src/ui/score_bar.h
   src/ui/minimap.cpp src/ui/minimap.h
+  src/ui/event_timeline.cpp src/ui/event_timeline.h
+  src/ui/respawn_panel.cpp src/ui/respawn_panel.h
   src/ui/robot_list.cpp src/ui/robot_list.h src/ui/console_panel.h)
 target_link_libraries(rm_client PRIVATE rm_core Qt6::Widgets)
 add_executable(rm_receive src/receive_main.cpp)

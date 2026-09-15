@@ -26,6 +26,7 @@ QString outpostStatus(quint32 value);      // GlobalUnitStatus：0 无敌 / 1–
 QString penaltyType(quint32 value);        // PenaltyInfo：1 黄牌 / 3 红牌 / 4 超功率 / 5 超热量 / 6 超射速 等
 QString buffType(quint32 value);           // Buff：1 攻击 / 2 防御 / 3 热量冷却 / 4 底盘功率 / 5 回血 / 6 兑换发弹量
 QString eventText(const rm::Event &value); // event_id 1–15 的中文事件描述，未知编号保留数值
+QString mechanismText(quint32 id, qint32 seconds); // GlobalSpecialMechanism：1 己方堡垒被占 / 2 对方堡垒被占
 
 QJsonObject json(const rm::GlobalUnitStatus &value);
 QJsonObject json(const rm::GlobalLogisticsStatus &value);
