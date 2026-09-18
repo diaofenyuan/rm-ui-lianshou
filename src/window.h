@@ -23,6 +23,8 @@ public:
     QImage image;
     rm::GameStatus data;
     bool hasData = false, stale = true, videoStale = true, overlay = false, simulation = true;
+    // 本机所属阵营：比分左右固定为红/蓝方，本方一侧加"我方"标注。
+    bool allyBlue = false;
     QString operatorName;
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -65,11 +67,13 @@ private:
     QCheckBox *overlay, *pauseLog;
     QLabel *connection, *dataState, *videoState, *liveBadge, *sourceBadge, *formError;
     QLabel *messageCount, *dataAge, *frameRate, *dropCount, *videoInfo, *packetInfo, *lastUpdate;
+    QLabel *videoSourcePlate, *videoOperatorPlate;
     QLabel *operatorIdentity, *profileHint, *matchNotice;
     QLabel *statusBadge, *statusMeta, *statusWarning;
     QVector<QLabel *> statusValues;
     QWidget *advanced, *logBody, *diagnostics, *logPanel, *statusPanel;
     QScrollArea *sidebar;
+    QObject *wheelGuard;
     QStackedWidget *pages;
     ConsolePage *consolePage;
     QPushButton *viewButton;

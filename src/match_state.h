@@ -57,6 +57,7 @@ public:
     quint64 positionMessages = 0, radarMessages = 0, eventMessages = 0, penaltyMessages = 0;
 
     // GlobalUnitStatus.robot_health 固定顺序（协议 2.2.4）：索引 0–4 为己方 1/2/3/4/7 号，5–9 为对方 1/2/3/4/7 号。
+    // 与下方 RadarInfoToClient 的顺序恰好相反：己方在前 vs 对方在前，两者不可互相套用。
     static constexpr int kSideHealthCount = 5;
     std::optional<quint32> allyHealth(int index) const;   // index 0–4
     std::optional<quint32> enemyHealth(int index) const;  // index 0–4

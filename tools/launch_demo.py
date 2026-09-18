@@ -1,5 +1,6 @@
 """管理本次演示的子进程，关闭窗口时一起停止模拟端。"""
 from pathlib import Path
+import argparse
 import os
 import socket
 import subprocess
@@ -9,7 +10,13 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def launch():
+def valid_robot_id(robot_id):
+    return 1 <= robot_id <= 9 or 101 <= robot_id <= 109
+
+
+def launch(robot_id):
+    if not valid_robot_id(robot_id):
+        raise RuntimeError("机器人编号需为红方 1–9 或蓝方 101–109")
     os.chdir(ROOT)
     exe = ROOT / "dist" / "rm_client.exe"
     ffmpeg = ROOT / "dist" / "ffmpeg.exe"
@@ -25,7 +32,10 @@ def launch():
     (ROOT / "build").mkdir(exist_ok=True)
     with open(ROOT / "build" / "demo-simulator.log", "w", encoding="utf-8") as server_log, \
          open(ROOT / "build" / "demo-client.log", "w", encoding="utf-8") as client_log:
-        sim = subprocess.Popen([sys.executable, "-X", "utf8", "tools/simulator.py", "--ffmpeg", str(ffmpeg)],
+        # 单兵消息（RobotStaticStatus / RobotDynamicStatus / RobotPosition / Event / 雷达视角）
+        # 由模拟端按该编号发布：两端用同一个编号，界面里的阵营才和收到的数据一致。
+        sim = subprocess.Popen([sys.executable, "-X", "utf8", "tools/simulator.py",
+                                "--ffmpeg", str(ffmpeg), "--robot-id", str(robot_id)],
                                stdout=server_log, stderr=subprocess.STDOUT, creationflags=flags)
         try:
             deadline = time.monotonic()+45
@@ -33,7 +43,7 @@ def launch():
                 if sim.poll() is not None or time.monotonic()>deadline:
                     raise RuntimeError("模拟端启动失败，查看 build/demo-simulator.log")
                 time.sleep(0.1)
-            client = subprocess.Popen([str(exe), "--connect", "--ffmpeg", str(ffmpeg)],
+            client = subprocess.Popen([str(exe), "--connect", "--robot-id", str(robot_id), "--ffmpeg", str(ffmpeg)],
                                       stdout=client_log, stderr=subprocess.STDOUT, creationflags=flags)
             try:
                 return client.wait()
@@ -45,8 +55,12 @@ def launch():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--robot-id", type=int, default=104,
+                        help="本次演示的操作位编号（红方 1–9 / 蓝方 101–109），模拟端与客户端共用")
+    parsed = parser.parse_args()
     try:
-        sys.exit(launch())
+        sys.exit(launch(parsed.robot_id))
     except (RuntimeError, OSError) as error:
         print(error, file=sys.stderr)
         sys.exit(1)

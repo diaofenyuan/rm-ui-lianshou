@@ -250,13 +250,13 @@ private slots:
         for (int i = 0; i < 10; ++i) unit.add_robot_health(quint32(100));
         m.applyUnitStatus(unit);
         QCOMPARE(m.timeline().size(), 1);                // 首次血量只建立基线
-        unit.set_robot_health(0, 0);                     // 对方 1 号被击毁
-        unit.set_robot_health(6, 0);                     // 我方 2 号被击毁
+        unit.set_robot_health(0, 0);                     // 我方 1 号被击毁
+        unit.set_robot_health(6, 0);                     // 对方 2 号被击毁
         m.applyUnitStatus(unit);
         QCOMPARE(m.timeline().size(), 3);
-        QVERIFY(m.timeline().last().text.startsWith("我方 2 号"));
+        QVERIFY(m.timeline().last().text.startsWith("对方 2 号"));
         QVERIFY(m.timeline().last().alert);
-        unit.set_robot_health(6, 200);                   // 我方 2 号复活
+        unit.set_robot_health(6, 200);                   // 对方 2 号复活
         m.applyUnitStatus(unit);
         QVERIFY(m.timeline().last().text.endsWith("复活"));
 
@@ -309,12 +309,20 @@ private slots:
         for (int i = 0; i < 10; ++i) u.add_robot_health(quint32(100 + i));
         m.applyUnitStatus(u);
         // 协议 2.2.4 固定顺序：索引 0–4 己方 1/2/3/4/7 号，5–9 对方。
-        QCOMPARE(m.allyHealth(0).value_or(0), quint32(105));
-        QCOMPARE(m.allyHealth(4).value_or(0), quint32(109));
-        QCOMPARE(m.enemyHealth(0).value_or(0), quint32(100));
-        QCOMPARE(m.enemyHealth(4).value_or(0), quint32(104));
+        QCOMPARE(m.allyHealth(0).value_or(0), quint32(100));
+        QCOMPARE(m.allyHealth(4).value_or(0), quint32(104));
+        QCOMPARE(m.enemyHealth(0).value_or(0), quint32(105));
+        QCOMPARE(m.enemyHealth(4).value_or(0), quint32(109));
         QVERIFY(m.allyHealth(5) == std::nullopt);
+        QVERIFY(m.enemyHealth(5) == std::nullopt);
         QVERIFY(m.enemyHealth(-1) == std::nullopt);
+        // 只提供己方 5 项时，对方槽位必须为空，不能回落到己方数据。
+        rm::GlobalUnitStatus allyOnly;
+        for (int i = 0; i < 5; ++i) allyOnly.add_robot_health(quint32(200 + i));
+        MatchState partial;
+        partial.applyUnitStatus(allyOnly);
+        QCOMPARE(partial.allyHealth(4).value_or(0), quint32(204));
+        QVERIFY(partial.enemyHealth(0) == std::nullopt);
         QVERIFY(!m.isStale(MatchState::Domain::UnitStatus));
         rm::RadarInfoToClient r;
         for (int i = 0; i < 12; ++i) r.add_robot_info()->set_target_pos_x(quint32(i));

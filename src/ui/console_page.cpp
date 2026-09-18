@@ -33,14 +33,14 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     layout->addLayout(grid, 1);
 
     auto *allyPanel = new ConsolePanel("我方机器人", ally, allySummary);
-    allyPanel->setMinimumWidth(225);
+    allyPanel->setMinimumWidth(200);
     auto *enemyPanel = new ConsolePanel("敌方机器人", enemy, enemySummary);
-    enemyPanel->setMinimumWidth(225);
+    enemyPanel->setMinimumWidth(200);
     minimap = new MinimapPanel(match);
     auto *source = new QLabel("点位：雷达 / 本机测速模块");
     source->setProperty("role", "muted");
     auto *minimapPanel = new ConsolePanel("战术地图", minimap, source);
-    minimapPanel->setMinimumWidth(260);
+    minimapPanel->setMinimumWidth(230);
     respawnPanel = new RespawnPanel(match);
     auto *respawn = new ConsolePanel("复活状态", respawnPanel);
     auto *center = new QVBoxLayout;

@@ -12,7 +12,9 @@ QString amount(quint32 value) { return QString("%L1").arg(value); }
 void drawCaption(QPainter &p, const QRectF &rect, const QString &text, const QColor &color) {
     p.setFont(theme::font(11));
     p.setPen(color);
-    p.drawText(rect, Qt::AlignHCenter | Qt::AlignVCenter, text);
+    // 窄窗口下"· 我方 / · 过期"后缀可能超出单元，按单元宽度省略，避免压到相邻格。
+    p.drawText(rect, Qt::AlignHCenter | Qt::AlignVCenter,
+               QFontMetrics(p.font()).elidedText(text, Qt::ElideRight, int(rect.width())));
 }
 void drawValue(QPainter &p, const QRectF &rect, const QString &text, const QColor &color, int pixels) {
     // 数值过长时先缩字号再省略，避免越过相邻单元。
@@ -58,8 +60,12 @@ void ScoreBar::paintEvent(QPaintEvent *) {
     p.drawRoundedRect(area, 12, 12);
 
     const QColor ink = theme::text, muted = theme::muted;
-    const QColor allyTeam = allyBlue ? theme::blue : theme::red;
-    const QColor enemyTeam = allyBlue ? theme::red : theme::blue;
+    // 顶栏统一按红方 / 蓝方命名，左右固定（红方在左、蓝方在右）；
+    // 本方一侧追加"· 我方"，避免同一根条子上"我方/敌方"与"红方/蓝方"两套口径混用。
+    const bool allyRed = !allyBlue;
+    const auto caption = [](const QString &text, bool mine, bool stale) {
+        return text + (mine ? QString(" · 我方") : QString()) + (stale ? QString(" · 过期") : QString());
+    };
     const bool hasGame = match->ageMs(MatchState::Domain::Game) >= 0;
     const bool hasUnit = match->ageMs(MatchState::Domain::UnitStatus) >= 0;
     const bool hasLogistics = match->ageMs(MatchState::Domain::Logistics) >= 0;
@@ -69,6 +75,20 @@ void ScoreBar::paintEvent(QPaintEvent *) {
     const QColor unitInk = hasUnit && !unitStale ? ink : muted;
     const auto &game = match->game;
     const auto &unit = match->unitStatus;
+
+    // 基地只有"己方 / 对方"两个协议口径，按所选阵营落到红方 / 蓝方。
+    const bool hasAllyBase = hasUnit && unit.has_base_health();
+    const bool hasEnemyBase = hasUnit && unit.has_enemy_base_health();
+    const bool hasAllyShield = hasUnit && unit.has_base_shield();
+    const bool hasEnemyShield = hasUnit && unit.has_enemy_base_shield();
+    const bool hasRedBase = allyRed ? hasAllyBase : hasEnemyBase;
+    const bool hasBlueBase = allyRed ? hasEnemyBase : hasAllyBase;
+    const quint32 redBase = allyRed ? unit.base_health() : unit.enemy_base_health();
+    const quint32 blueBase = allyRed ? unit.enemy_base_health() : unit.base_health();
+    const bool hasRedShield = allyRed ? hasAllyShield : hasEnemyShield;
+    const bool hasBlueShield = allyRed ? hasEnemyShield : hasAllyShield;
+    const quint32 redShield = allyRed ? unit.base_shield() : unit.enemy_base_shield();
+    const quint32 blueShield = allyRed ? unit.enemy_base_shield() : unit.base_shield();
 
     const QRectF content = area.adjusted(16, 10, -16, -10);
     const qreal weights[] = {1.15, 0.62, 1.3, 0.62, 1.15, 0.9};
@@ -83,23 +103,22 @@ void ScoreBar::paintEvent(QPaintEvent *) {
         x += width + gap;
     }
 
-    // 我方基地
-    {
-        const QRectF &cell = cells[0];
+    // 基地血量：比例条按规则手册 5000 归一，未知上限不猜测。
+    const auto drawBaseCell = [&](const QRectF &cell, const QString &name, const QColor &color, bool mine,
+                                  bool present, quint32 health, bool hasShield, quint32 shield) {
         drawCaption(p, QRectF(cell.left(), cell.top(), cell.width(), 16),
-                    unitStale && hasUnit ? "我方基地 · 过期" : "我方基地", allyTeam);
-        QString text = hasUnit && unit.has_base_health() ? amount(unit.base_health()) : "—";
-        if (hasUnit && unit.has_base_shield() && unit.base_shield() > 0)
-            text += QString(" +%L1").arg(unit.base_shield());
+                    caption(name, mine, unitStale && hasUnit), color);
+        QString text = present ? amount(health) : QString("—");
+        if (present && hasShield && shield > 0) text += QString(" +%L1").arg(shield);
         drawValue(p, QRectF(cell.left(), cell.top() + 17, cell.width(), 26), text, unitInk, 19);
-        const double ratio = hasUnit && unit.has_base_health()
-            ? unit.base_health() / double(kBaseMaxHealth) : 0;
-        drawTrack(p, QRectF(cell.left() + 6, cell.bottom() - 11, cell.width() - 12, 6), ratio, allyTeam);
-    }
-    // 红方比分 / 中央阶段与倒计时 / 蓝方比分
+        const double ratio = present ? health / double(kBaseMaxHealth) : 0;
+        drawTrack(p, QRectF(cell.left() + 6, cell.bottom() - 11, cell.width() - 12, 6), ratio, color);
+    };
+    drawBaseCell(cells[0], "红方基地", theme::red, allyRed, hasRedBase, redBase, hasRedShield, redShield);
+    // 比分：红方在左、蓝方在右，不随阵营翻转，本方一侧加"我方"标注。
     {
         const QRectF &cell = cells[1];
-        drawCaption(p, QRectF(cell.left(), cell.top(), cell.width(), 16), "红方比分", theme::red);
+        drawCaption(p, QRectF(cell.left(), cell.top(), cell.width(), 16), caption("红方比分", allyRed, false), theme::red);
         drawValue(p, QRectF(cell.left(), cell.top() + 17, cell.width(), 30),
                   hasGame && game.has_red_score() ? amount(game.red_score()) : "—", gameInk, 24);
     }
@@ -121,23 +140,11 @@ void ScoreBar::paintEvent(QPaintEvent *) {
     }
     {
         const QRectF &cell = cells[3];
-        drawCaption(p, QRectF(cell.left(), cell.top(), cell.width(), 16), "蓝方比分", theme::blue);
+        drawCaption(p, QRectF(cell.left(), cell.top(), cell.width(), 16), caption("蓝方比分", allyBlue, false), theme::blue);
         drawValue(p, QRectF(cell.left(), cell.top() + 17, cell.width(), 30),
                   hasGame && game.has_blue_score() ? amount(game.blue_score()) : "—", gameInk, 24);
     }
-    // 敌方基地
-    {
-        const QRectF &cell = cells[4];
-        drawCaption(p, QRectF(cell.left(), cell.top(), cell.width(), 16),
-                    unitStale && hasUnit ? "敌方基地 · 过期" : "敌方基地", enemyTeam);
-        QString text = hasUnit && unit.has_enemy_base_health() ? amount(unit.enemy_base_health()) : "—";
-        if (hasUnit && unit.has_enemy_base_shield() && unit.enemy_base_shield() > 0)
-            text += QString(" +%L1").arg(unit.enemy_base_shield());
-        drawValue(p, QRectF(cell.left(), cell.top() + 17, cell.width(), 26), text, unitInk, 19);
-        const double ratio = hasUnit && unit.has_enemy_base_health()
-            ? unit.enemy_base_health() / double(kBaseMaxHealth) : 0;
-        drawTrack(p, QRectF(cell.left() + 6, cell.bottom() - 11, cell.width() - 12, 6), ratio, enemyTeam);
-    }
+    drawBaseCell(cells[4], "蓝方基地", theme::blue, allyBlue, hasBlueBase, blueBase, hasBlueShield, blueShield);
     // 经济
     {
         const QRectF &cell = cells[5];

@@ -11,6 +11,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
+#include <QScreen>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QStyle>
@@ -42,6 +43,20 @@ protected:
         QSpinBox::paintEvent(event); QPainter p(this);
         chevron(p, QPointF(width()-11, height()/4.0), true); chevron(p, QPointF(width()-11, height()*3/4.0));
     }
+};
+// 滚轮停在组合框或端口框上会直接改值，而配置栏本身要滚动才能看到端口、FFmpeg 路径等内容：
+// 这里把落在这些控件上的滚轮一律转交给配置栏滚动，控件仍可通过点击展开与方向键修改。
+class WheelGuard final : public QObject {
+public:
+    explicit WheelGuard(QAbstractScrollArea *area, QObject *parent = nullptr) : QObject(parent), area(area) {}
+protected:
+    bool eventFilter(QObject *, QEvent *event) override {
+        if (event->type() != QEvent::Wheel || !area) return false;
+        QApplication::sendEvent(area->verticalScrollBar(), event);
+        return true;
+    }
+private:
+    QAbstractScrollArea *area;
 };
 QLabel *label(const QString &text, const char *role = nullptr) {
     auto *value = new QLabel(text);
@@ -91,11 +106,14 @@ void MatchSummary::paintEvent(QPaintEvent *) {
     p.setPen(Qt::NoPen); p.setBrush(QColor("#F4F7FA")); p.drawRoundedRect(rect(), 8, 8);
     p.setBrush(QColor("#FCEEF1")); p.drawRoundedRect(QRect(0, 0, side, 70), 8, 8);
     p.setBrush(QColor("#EDF4FD")); p.drawRoundedRect(QRect(width()-side, 0, side, 70), 8, 8);
+    // 比分左右固定为红方 / 蓝方，本方一侧加"我方"标注，避免与顶部身份行对不上。
+    const QString redCaption = source->allyBlue ? QString("红方得分") : QString("红方得分 · 我方");
+    const QString blueCaption = source->allyBlue ? QString("蓝方得分 · 我方") : QString("蓝方得分");
     p.setPen(theme::red); p.setFont(theme::font(12, true));
-    p.drawText(QRect(8, 8, side-16, 20), Qt::AlignCenter, "红方得分");
+    p.drawText(QRect(8, 8, side-16, 20), Qt::AlignCenter, redCaption);
     fitText(p, QRect(8, 30, side-16, 38), data.has_red_score() ? QString::number(data.red_score()) : "—", 34, true);
     p.setPen(theme::blue); p.setFont(theme::font(12, true));
-    p.drawText(QRect(width()-side+8, 8, side-16, 20), Qt::AlignCenter, "蓝方得分");
+    p.drawText(QRect(width()-side+8, 8, side-16, 20), Qt::AlignCenter, blueCaption);
     fitText(p, QRect(width()-side+8, 30, side-16, 38), data.has_blue_score() ? QString::number(data.blue_score()) : "—", 34, true);
     QString state = source->hasData && data.has_current_stage() ? status::stage(data.current_stage()) : "等待比赛信息";
     if (source->hasData && source->stale) state += " · 已过期";
@@ -132,9 +150,13 @@ void VideoCanvas::paintEvent(QPaintEvent *) {
     clip.addRoundedRect(QRectF(rect()), 8, 8);
     p.setClipPath(clip);
     p.fillRect(rect(), QColor("#142330"));
+    // 画面按等比居中绘制：记下实际绘制矩形，断流提示与叠加面板都以它为基准，
+    // 不再以画布矩形定位，避免落在画面之外的空白上或偏出画面。
+    QRect imageRect;
     if (!image.isNull()) {
         const auto size = image.size().scaled(this->size(), Qt::KeepAspectRatio);
-        p.drawImage(QRect(QPoint((width()-size.width())/2, (height()-size.height())/2), size), image);
+        imageRect = QRect(QPoint((width()-size.width())/2, (height()-size.height())/2), size);
+        p.drawImage(imageRect, image);
     } else {
         p.setPen(QColor("#203440"));
         for (int x = 0; x < width(); x += 40) p.drawLine(x, 0, x, height());
@@ -152,37 +174,39 @@ void VideoCanvas::paintEvent(QPaintEvent *) {
                    simulation ? "启动本地演示后，连接数据与图传" : "检查图传接线与本机监听 IP，然后连接");
     }
 
-    p.setPen(Qt::NoPen); p.setBrush(QColor(16, 30, 41, 240));
-    p.drawRoundedRect(QRect(14, height()-39, simulation ? 222 : 189, 26), 5, 5);
-    p.setPen(simulation ? QColor("#F4D197") : QColor("#8EE2C6")); p.setFont(theme::font(11));
-    p.drawText(QRect(24, height()-39, 220, 26), Qt::AlignVCenter,
-               simulation ? "本地模拟 / 非真实比赛画面" : "实机图传 / RM2026");
-    if (!operatorName.isEmpty()) {
-        const int nameWidth = qMin(width()-270, p.fontMetrics().horizontalAdvance(operatorName)+24);
-        p.setPen(Qt::NoPen); p.setBrush(QColor(16, 30, 41, 240));
-        p.drawRoundedRect(QRect(width()-nameWidth-14, height()-39, nameWidth, 26), 5, 5);
-        p.setPen(QColor("#EDF4F7"));
-        p.drawText(QRect(width()-nameWidth-4, height()-39, nameWidth-20, 26), Qt::AlignCenter,
-            p.fontMetrics().elidedText(operatorName, Qt::ElideRight, nameWidth-20));
-    }
-
+    // 来源与操作位铭牌移到画布下方工具行，画面区域内不再绘制常驻底条。
     if (videoStale && !image.isNull()) {
-        p.fillRect(QRect(0, height()/2-23, width(), 46), QColor(32, 28, 23, 235));
-        p.setPen(QColor("#F4D197")); p.setFont(theme::font(13));
-        p.drawText(QRect(0, height()/2-23, width(), 46), Qt::AlignCenter, "图传已中断 · 当前为最后一帧");
+        // 断流提示贴在画面左上角，尽量少压画面内容。
+        const QString text = "图传已中断 · 当前为最后一帧";
+        p.setFont(theme::font(12));
+        const int pillWidth = qMin(imageRect.width()-24, p.fontMetrics().horizontalAdvance(text)+28);
+        const QRect pill(imageRect.left()+12, imageRect.top()+12, pillWidth, 30);
+        p.setPen(Qt::NoPen); p.setBrush(QColor(32, 28, 23, 235));
+        p.drawRoundedRect(pill, 6, 6);
+        p.setPen(QColor("#F4D197"));
+        p.drawText(pill, Qt::AlignCenter, p.fontMetrics().elidedText(text, Qt::ElideRight, pillWidth-16));
     }
     if (!overlay || (!hasData && image.isNull())) return;
-    const bool compact = height() < 280;
-    const int w = qMin(width()-32, 540), x = (width()-w)/2;
+    // 叠加面板锚定实际画面矩形，宽扁画布下不会偏出画面之外。
+    const QRect frame = image.isNull() ? rect() : imageRect;
+    const bool compact = frame.height() < 280;
+    const int w = qMin(frame.width()-32, 540), x = frame.left()+(frame.width()-w)/2;
     const int side = w/4;
-    const int captionY = compact ? 17 : 24, valueY = compact ? 36 : 44, valueHeight = compact ? 31 : 38;
+    const int panelTop = frame.top() + (compact ? 12 : 16);
+    const int captionY = panelTop + (compact ? 5 : 8), valueY = panelTop + (compact ? 24 : 28);
+    const int valueHeight = compact ? 31 : 38;
+    const int roundY = panelTop + (compact ? 54 : 71), noteY = panelTop + (compact ? 81 : 110);
     p.setPen(QColor(210, 220, 229, 230)); p.setBrush(QColor(255, 255, 255, 245));
-    p.drawRoundedRect(QRect(x, compact ? 12 : 16, w, compact ? 76 : 104), 10, 10);
+    p.drawRoundedRect(QRect(x, panelTop, w, compact ? 76 : 104), 10, 10);
     p.setPen(Qt::NoPen); p.setBrush(theme::red); p.drawRoundedRect(QRect(x+12, captionY+7, 3, 36), 1, 1);
     p.setBrush(theme::blue); p.drawRoundedRect(QRect(x+w-15, captionY+7, 3, 36), 1, 1);
+    // 红方在左、蓝方在右，本方一侧加"我方"标注，与上方比赛概览口径一致。
+    const QString allyTag = " · 我方";
     p.setFont(theme::font(11)); p.setPen(theme::red);
-    p.drawText(QRect(x+20, captionY, side-24, 20), Qt::AlignCenter, "红方得分");
-    p.setPen(theme::blue); p.drawText(QRect(x+w-side+4, captionY, side-24, 20), Qt::AlignCenter, "蓝方得分");
+    p.drawText(QRect(x+20, captionY, side-24, 20), Qt::AlignCenter,
+               allyBlue ? QString("红方得分") : QString("红方得分") + allyTag);
+    p.setPen(theme::blue); p.drawText(QRect(x+w-side+4, captionY, side-24, 20), Qt::AlignCenter,
+               allyBlue ? QString("蓝方得分") + allyTag : QString("蓝方得分"));
     p.setPen(theme::red);
     fitText(p, QRect(x+20, valueY, side-24, valueHeight), data.has_red_score() ? QString::number(data.red_score()) : "—", compact ? 26 : 32, true);
     p.setPen(theme::blue);
@@ -198,7 +222,7 @@ void VideoCanvas::paintEvent(QPaintEvent *) {
         .arg(data.has_current_round() ? QString::number(data.current_round()) : "—")
         .arg(data.has_total_rounds() ? QString::number(data.total_rounds()) : "—") : "GameStatus";
     p.setPen(theme::muted); p.setFont(theme::font(11));
-    p.drawText(QRect(x+12, compact ? 66 : 87, w-24, compact ? 20 : 23), Qt::AlignCenter, round);
+    p.drawText(QRect(x+12, roundY, w-24, compact ? 20 : 23), Qt::AlignCenter, round);
 
     QString note;
     if (hasData) {
@@ -210,15 +234,20 @@ void VideoCanvas::paintEvent(QPaintEvent *) {
             note += " · 暂停状态未提供";
         }
         p.setPen(Qt::NoPen); p.setBrush(QColor(255, 255, 255, 245));
-        p.drawRoundedRect(QRect(x, compact ? 93 : 126, w, compact ? 23 : 27), 5, 5);
+        p.drawRoundedRect(QRect(x, noteY, w, compact ? 23 : 27), 5, 5);
         p.setPen(stale ? theme::warning : theme::muted); p.setFont(theme::font(11));
-        p.drawText(QRect(x+10, compact ? 93 : 126, w-20, compact ? 23 : 27), Qt::AlignCenter, p.fontMetrics().elidedText(note, Qt::ElideRight, w-20));
+        p.drawText(QRect(x+10, noteY, w-20, compact ? 23 : 27), Qt::AlignCenter, p.fontMetrics().elidedText(note, Qt::ElideRight, w-20));
     }
 }
 
 MainWindow::MainWindow(QString ffmpeg) {
     setWindowTitle("RoboMaster · 单兵客户端");
-    setMinimumSize(1000, 720); resize(1360, 840);
+    // 最小高度需保证图传不被下方工具行与日志压住（自检项"最小窗口布局"），
+    // 宽度按"配置栏 + 总控台三列"的最小需求给。
+    setMinimumSize(1024, 720);
+    // 默认按可用屏幕取景：1366×768 / 1280×720 上不再把配置栏底部（端口、FFmpeg 路径）顶到屏幕外。
+    const QRect available = QGuiApplication::primaryScreen()->availableGeometry();
+    resize(qMin(1360, int(available.width() * 0.94)), qMin(840, int(available.height() * 0.94)));
     setStyleSheet(theme::stylesheet());
     auto *root = new QWidget; root->setObjectName("root"); setCentralWidget(root);
     auto *layout = new QVBoxLayout(root); layout->setContentsMargins(22, 18, 22, 18); layout->setSpacing(16);
@@ -249,7 +278,11 @@ MainWindow::MainWindow(QString ffmpeg) {
     viewLayout->addWidget(canvas, 1);
     auto *videoTools = new QHBoxLayout; viewLayout->addLayout(videoTools);
     overlay = new QCheckBox("画内叠加"); overlay->setToolTip("在图传内额外叠加比分；关闭后上方比赛概览仍可查看");
-    videoTools->addWidget(overlay); videoTools->addStretch();
+    videoTools->addWidget(overlay);
+    // 来源与操作位铭牌放在画面之外，不再压住图传内容。
+    videoSourcePlate = label("本地模拟 / 非真实比赛画面", "badge"); videoTools->addWidget(videoSourcePlate);
+    videoOperatorPlate = label("未选择操作位", "badge"); videoTools->addWidget(videoOperatorPlate);
+    videoTools->addStretch();
     videoInfo = label("HEVC 图传 · 等待输入", "muted"); videoTools->addWidget(videoInfo);
     matchNotice = label("比赛信息：等待连接", "notice"); matchNotice->setWordWrap(true); viewLayout->addWidget(matchNotice);
     diagnostics = new QWidget; auto *stats = new QHBoxLayout(diagnostics); stats->setContentsMargins(0, 0, 0, 0);
@@ -263,7 +296,11 @@ MainWindow::MainWindow(QString ffmpeg) {
     frameRate = metric("解码帧率", "0 fps"); dropCount = metric("丢弃视频帧", "0");
 
     sidebar = new QScrollArea; sidebar->setObjectName("sidebar"); sidebar->setFrameShape(QFrame::NoFrame);
-    sidebar->setWidgetResizable(true); sidebar->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); sidebar->setFixedWidth(312); body->addWidget(sidebar);
+    // 固定 312 会把总控台顶出窄屏；改为可自适应，横向滚动条仍关闭。
+    sidebar->setWidgetResizable(true); sidebar->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    sidebar->setMinimumWidth(280); sidebar->setMaximumWidth(360);
+    sidebar->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    body->addWidget(sidebar);
     auto *side = new QWidget; side->setObjectName("side"); sidebar->setWidget(side);
     auto *sideLayout = new QVBoxLayout(side); sideLayout->setContentsMargins(0, 0, 4, 0); sideLayout->setSpacing(14);
     auto *settings = panel(); sideLayout->addWidget(settings);
@@ -334,6 +371,11 @@ MainWindow::MainWindow(QString ffmpeg) {
     statusWarning = label("", "notice"); statusWarning->setWordWrap(true); statusWarning->hide(); statusLayout->addWidget(statusWarning);
     // 该面板放在链路状态下方，始终保留十个原始字段的可见落点；日志仍用于查看完整 JSON。
     refreshStatusDetails();
+
+    // 配置栏内的下拉框与端口框不再响应滚轮，滚轮一律用于滚动配置栏本身。
+    wheelGuard = new WheelGuard(sidebar, this);
+    for (auto *control : side->findChildren<QComboBox *>()) control->installEventFilter(wheelGuard);
+    for (auto *control : side->findChildren<QSpinBox *>()) control->installEventFilter(wheelGuard);
 
     logPanel = panel(); logPanel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum); layout->addWidget(logPanel);
     auto *logLayout = new QVBoxLayout(logPanel); logLayout->setContentsMargins(12, 5, 12, 5); logLayout->setSpacing(4);
@@ -475,6 +517,7 @@ void MainWindow::updateProfile() {
     connectButton->setText(pending ? "应用兵种并重连" : active ? "重新连接当前机器人" : "连接所选机器人");
     const bool previous = !active && (canvas->hasData || !canvas->image.isNull());
     const int displayedId = active || previous ? connectedRobotId : id;
+    canvas->allyBlue = displayedId > 100;
     operatorIdentity->setText(QString("%1 / ID %2 · %3").arg(profile::name(displayedId)).arg(displayedId)
         .arg(active ? "当前连接" : previous ? "已断开，保留上次画面" : "待连接"));
     // 编辑下一次连接的操作位时，不改写旧画面的来源身份。
@@ -607,6 +650,9 @@ void MainWindow::refresh() {
     canvas->stale = !mqttReady || lastData < 0 || now-lastData > 1500;
     canvas->videoStale = lastFrame < 0 || now-lastFrame > 1500;
     badge(sourceBadge, canvas->simulation ? "本地模拟" : "实机链路", canvas->simulation ? "warning" : "neutral");
+    badge(videoSourcePlate, canvas->simulation ? "本地模拟 / 非真实比赛画面" : "实机图传 / RM2026",
+          canvas->simulation ? "warning" : "good");
+    badge(videoOperatorPlate, canvas->operatorName.isEmpty() ? "未选择操作位" : canvas->operatorName, "neutral");
     badge(dataState, !active ? "未连接" : canvas->stale ? (lastData < 0 ? "等待数据" : "数据过期") : "实时更新",
           !active ? "neutral" : canvas->stale ? "warning" : "good");
     const QString videoText = !active ? "未连接" : canvas->videoStale ? (lastFrame < 0 ? "等待画面" : "图传中断") : "正在播放";

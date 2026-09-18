@@ -12,12 +12,14 @@ constexpr int kEventLogLimit = 200;
 constexpr int kBuffLimit = 32;
 constexpr int kTimelineLimit = 300;
 
-// GlobalUnitStatus.robot_health 槽位编号（协议 2.2.4）：前 5 项对方、后 5 项己方。
+// GlobalUnitStatus.robot_health 槽位编号（协议 2.2.4 第 53 页数据编号 11）：
+// 按己方 1/2/3/4/7 号、对方 1/2/3/4/7 号的顺序发送，即前 5 项我方、后 5 项对方。
+// 注意与 2.2.19 雷达的 robot_info 顺序（前 6 项对方、后 6 项己方）相反，不要互相套用。
 constexpr int kHealthSlots[5] = {1, 2, 3, 4, 7};
 QString slotName(int index) {
-    const bool enemy = index < 5;
+    const bool ally = index < 5;
     const int number = kHealthSlots[index % 5];
-    return QString("%1 %2 号%3").arg(enemy ? "对方" : "我方").arg(number)
+    return QString("%1 %2 号%3").arg(ally ? "我方" : "对方").arg(number)
         .arg(QString::fromUtf8(profile::roles[number - 1].name));
 }
 
@@ -202,21 +204,26 @@ void MatchState::applyBuff(const rm::Buff &value) {
     emit buffsChanged();
 }
 
+// robot_health 前 5 项是我方：越界或消息只带部分槽位时返回空值，由界面显示"未提供"，
+// 不允许回落到相邻阵营的槽位。
 std::optional<quint32> MatchState::allyHealth(int index) const {
-    const int offset = index + kSideHealthCount;
-    if (index < 0 || offset >= unitStatus.robot_health_size()) return std::nullopt;
-    return unitStatus.robot_health(offset);
-}
-std::optional<quint32> MatchState::enemyHealth(int index) const {
-    if (index < 0 || index >= unitStatus.robot_health_size()) return std::nullopt;
+    if (index < 0 || index >= kSideHealthCount || index >= unitStatus.robot_health_size())
+        return std::nullopt;
     return unitStatus.robot_health(index);
 }
+std::optional<quint32> MatchState::enemyHealth(int index) const {
+    const int offset = index + kSideHealthCount;
+    if (index < 0 || index >= kSideHealthCount || offset >= unitStatus.robot_health_size())
+        return std::nullopt;
+    return unitStatus.robot_health(offset);
+}
+// 2.2.19 雷达的 robot_info 前 6 项是对方，后 6 项是己方。
 std::optional<rm::RadarSingleRobotInfo> MatchState::enemyRadar(int index) const {
-    if (index < 0 || index >= radar.robot_info_size()) return std::nullopt;
+    if (index < 0 || index >= kSideRadarCount || index >= radar.robot_info_size()) return std::nullopt;
     return radar.robot_info(index);
 }
 std::optional<rm::RadarSingleRobotInfo> MatchState::allyRadar(int index) const {
     const int offset = index + kSideRadarCount;
-    if (index < 0 || offset >= radar.robot_info_size()) return std::nullopt;
+    if (index < 0 || index >= kSideRadarCount || offset >= radar.robot_info_size()) return std::nullopt;
     return radar.robot_info(offset);
 }

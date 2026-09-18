@@ -70,8 +70,9 @@ QTabWidget::pane { border: none; }
 QTabBar::tab { background: transparent; color: #596C7A; padding: 9px 13px; border-bottom: 2px solid transparent; }
 QTabBar::tab:selected { color: #087258; border-bottom-color: #087F68; font-weight: 600; }
 QTabBar::tab:hover { background: #EFF6F3; }
-QScrollBar:vertical { background: transparent; width: 7px; margin: 0; }
-QScrollBar::handle:vertical { background: #C2CDD5; min-height: 28px; border-radius: 3px; }
+QScrollBar:vertical { background: #EDF1F4; width: 10px; margin: 0; border-radius: 5px; }
+QScrollBar::handle:vertical { background: #AEBDC8; min-height: 28px; border-radius: 4px; }
+QScrollBar::handle:vertical:hover { background: #718A9B; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QToolTip { background: #182B3A; color: white; border: none; padding: 6px; }
