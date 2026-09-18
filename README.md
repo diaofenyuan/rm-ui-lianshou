@@ -54,6 +54,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Package
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Setup -Package
 ```
 
+只准备模拟端环境时可以双击项目根目录的 `setup-venv.cmd`（等价于 `tools\setup-venv.ps1`）：它定位 Python 3.11、创建 `.venv`、按清华源安装 `tools/requirements.txt`，并在已有 `protoc.exe` 时生成 protobuf Python 代码。加 `-Force` 重建环境，加 `-WithBuildTools` 一并安装 aqtinstall / cmake / ninja，加 `-UseDefaultIndex` 改用 PyPI 官方源。
+
 依赖：Qt 6.8.3 MinGW、MinGW 13.1、CMake/Ninja、Protobuf 3.21.12、Eclipse Paho C 1.3.14；模拟端版本锁定在 `tools/requirements.txt`。Qt 从官方源下载；Python 使用清华源。CMake 从对应官方 GitHub 仓库拉取 C/C++ 依赖。FFmpeg 需能执行 `ffmpeg -encoders` 并包含 `libx265`；打包会复制当前 PATH 中的 `ffmpeg.exe`，本机使用静态发行版。
 
 `dist` 包含客户端、独立接收器、Qt/MinGW 运行库及 FFmpeg。模拟演示还需要本项目的 `tools`、`.venv` 与 `build/generated/game_status_pb2.py`，不能只复制 `dist` 后运行模拟脚本。
