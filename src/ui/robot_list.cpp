@@ -126,7 +126,7 @@ void RobotListPanel::paintEvent(QPaintEvent *) {
             const QColor numberInk = !health.has_value() ? muted
                 : destroyed ? theme::red : unitStale && hasUnit ? muted : ink;
             const QString hpText = !health.has_value() ? "未提供"
-                : destroyed ? "已摧毁" : QString("%L1").arg(*health);
+                : destroyed ? "已阵亡" : QString("%L1").arg(*health);
             p.setPen(numberInk);
             p.drawText(QRectF(trackRight + 4, y, numberWidth, own ? 18 : height),
                        Qt::AlignRight | (own ? Qt::AlignTop : Qt::AlignVCenter), hpText);
