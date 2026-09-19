@@ -1,6 +1,6 @@
 #pragma once
 #include "match_state.h"
-#include "receiver.h"
+#include "robot_link_pool.h"
 #include "ui/console_page.h"
 #include "ui/operator_page.h"
 #include "video.h"
@@ -31,7 +31,7 @@ public:
     bool runUiChecks(const QString &evidencePrefix = {});
     QJsonObject metrics() const;
 private:
-    StatusReceiver receiver;
+    RobotLinkPool linkPool;
     VideoReceiver video;
     MatchState match;
     QElapsedTimer clock;

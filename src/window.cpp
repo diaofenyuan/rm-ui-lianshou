@@ -262,14 +262,21 @@ MainWindow::MainWindow(QString ffmpeg) {
     connect(robotRole, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::updateProfile);
     connect(connectButton, &QPushButton::clicked, this, &MainWindow::startConnection);
     connect(stopButton, &QPushButton::clicked, this, [this] {
-        active = false; receiver.stop(); video.stop(); mqttReady = false; lastData = lastFrame = -1; match.reset();
+        active = false; linkPool.stop(); video.stop(); mqttReady = false; lastData = lastFrame = -1; match.reset();
         stopButton->setEnabled(false); frameRate->setText("0 fps"); updateProfile(); refresh();
     });
     connect(operatorPage->overlayToggle(), &QCheckBox::toggled, this, [this](bool) { updateHudVisibility(); refresh(); });
-    connect(&receiver, &StatusReceiver::stateChanged, this, [this](const QString &text, bool ready) {
+    connect(&linkPool, &RobotLinkPool::stateChanged, this, [this](const QString &text, bool ready) {
         connection->setText(text); mqttReady = ready; addEvent(text); refresh();
     });
-    connect(&receiver, &StatusReceiver::received, this, [this](const rm::GameStatus &value) {
+    connect(&linkPool, &RobotLinkPool::linkChanged, this,
+        [this](int id, bool ready, const QString &text, int subscribedTopics) {
+            match.noteRobotLink(id, QString("mqtt://%1").arg(id));
+            if (id != connectedRobotId && !text.isEmpty())
+                addEvent(QString("机器人 %1：%2（%3 topics）").arg(id).arg(text).arg(subscribedTopics));
+            Q_UNUSED(ready);
+        });
+    connect(&linkPool, &RobotLinkPool::received, this, [this](const rm::GameStatus &value) {
         // 先与上一份快照比较再写入，否则变化检测会把新值和新值比。
         recordMatchChanges(value);
         match.applyGame(value);
@@ -294,35 +301,43 @@ MainWindow::MainWindow(QString ffmpeg) {
         object["received_at"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
         appendLog(log, QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
     };
-    connect(&receiver, &StatusReceiver::receivedUnitStatus, this, [this, appendDomain](const rm::GlobalUnitStatus &value) {
+    connect(&linkPool, &RobotLinkPool::receivedUnitStatus, this, [this, appendDomain](const rm::GlobalUnitStatus &value) {
         match.applyUnitStatus(value); appendDomain(status::json(value));
     });
-    connect(&receiver, &StatusReceiver::receivedLogistics, this, [this, appendDomain](const rm::GlobalLogisticsStatus &value) {
+    connect(&linkPool, &RobotLinkPool::receivedLogistics, this, [this, appendDomain](const rm::GlobalLogisticsStatus &value) {
         match.applyLogistics(value); appendDomain(status::json(value));
     });
-    connect(&receiver, &StatusReceiver::receivedSpecialMechanism, &match, &MatchState::applySpecialMechanism);
-    connect(&receiver, &StatusReceiver::receivedEvent, this, [this, appendDomain](const rm::Event &value) {
+    connect(&linkPool, &RobotLinkPool::receivedSpecialMechanism, &match, &MatchState::applySpecialMechanism);
+    connect(&linkPool, &RobotLinkPool::receivedEvent, this, [this, appendDomain](const rm::Event &value) {
         match.applyEvent(value); addEvent(status::eventText(value)); appendDomain(status::json(value));
     });
-    connect(&receiver, &StatusReceiver::receivedInjury, this, [this, appendDomain](const rm::RobotInjuryStat &value) {
-        match.applyInjury(value); appendDomain(status::json(value));
+    connect(&linkPool, &RobotLinkPool::receivedInjury, this, [this, appendDomain](int id, const rm::RobotInjuryStat &value) {
+        match.applyInjury(id, value); appendDomain(status::json(value));
     });
-    connect(&receiver, &StatusReceiver::receivedRespawn, this, [this, appendDomain](const rm::RobotRespawnStatus &value) {
-        match.applyRespawn(value); appendDomain(status::json(value));
+    connect(&linkPool, &RobotLinkPool::receivedRespawn, this, [this, appendDomain](int id, const rm::RobotRespawnStatus &value) {
+        match.applyRespawn(id, value); appendDomain(status::json(value));
     });
-    connect(&receiver, &StatusReceiver::receivedStatic, this, [this, appendDomain](const rm::RobotStaticStatus &value) {
-        match.applyStatic(value); appendDomain(status::json(value));
+    connect(&linkPool, &RobotLinkPool::receivedStatic, this, [this, appendDomain](int id, const rm::RobotStaticStatus &value) {
+        match.applyStatic(id, value); appendDomain(status::json(value));
     });
-    connect(&receiver, &StatusReceiver::receivedDynamic, &match, &MatchState::applyDynamic);
-    connect(&receiver, &StatusReceiver::receivedModule, &match, &MatchState::applyModule);
-    connect(&receiver, &StatusReceiver::receivedPosition, &match, &MatchState::applyPosition);
-    connect(&receiver, &StatusReceiver::receivedBuff, &match, &MatchState::applyBuff);
-    connect(&receiver, &StatusReceiver::receivedPenalty, this, [this, appendDomain](const rm::PenaltyInfo &value) {
+    connect(&linkPool, &RobotLinkPool::receivedDynamic, this, [this](int id, const rm::RobotDynamicStatus &value) {
+        match.applyDynamic(id, value);
+    });
+    connect(&linkPool, &RobotLinkPool::receivedModule, this, [this](int id, const rm::RobotModuleStatus &value) {
+        match.applyModule(id, value);
+    });
+    connect(&linkPool, &RobotLinkPool::receivedPosition, this, [this](int id, const rm::RobotPosition &value) {
+        match.applyPosition(id, value);
+    });
+    connect(&linkPool, &RobotLinkPool::receivedBuff, this, [this](int id, const rm::Buff &value) {
+        match.applyBuff(id, value);
+    });
+    connect(&linkPool, &RobotLinkPool::receivedPenalty, this, [this, appendDomain](const rm::PenaltyInfo &value) {
         match.applyPenalty(value);
         addEvent(QString("判罚：%1").arg(value.has_penalty_type() ? status::penaltyType(value.penalty_type()) : "未提供"));
         appendDomain(status::json(value));
     });
-    connect(&receiver, &StatusReceiver::receivedRadar, &match, &MatchState::applyRadar);
+    connect(&linkPool, &RobotLinkPool::receivedRadar, &match, &MatchState::applyRadar);
     connect(&video, &VideoReceiver::problem, this, &MainWindow::addEvent);
     connect(operatorPage->focusButton(), &QPushButton::toggled, this, &MainWindow::setFocusMode);
     connect(new QShortcut(QKeySequence("F10"), this), &QShortcut::activated, this, [this] { setFocusMode(!focusMode); });
@@ -497,21 +512,22 @@ bool MainWindow::validateForm() {
 void MainWindow::startConnection() {
     // 参数错误不打断已有链路；先验证，再替换连接。
     if (!validateForm()) return;
-    receiver.stop(); video.stop(); messages = 0; lastData = lastFrame = -1; mqttReady = false;
+    linkPool.stop(); video.stop(); messages = 0; lastData = lastFrame = -1; mqttReady = false;
     match.reset();
     fpsSampleAt = clock.elapsed(); fpsSampleFrames = 0; frameRate->setText("0 fps");
     operatorPage->stage()->setFrame(QImage(), true);
     operatorPage->strip()->setAccessibleDescription("等待比赛信息");
     simulation = mode->currentIndex() == 0; active = true; connectedRobotId = robotId->text().toInt();
+    match.setPrimaryRobotId(connectedRobotId);
     operatorPage->setSimulation(simulation);
     consolePage->setRobot(connectedRobotId);
     updateProfile(); addEvent("连接操作位：" + operatorPage->operatorName());
     stopButton->setEnabled(true); lastUpdate->setText("最近接收 —");
-    const bool mqttStarted = receiver.start(host->text().trimmed(), mqttPort->value(), robotId->text().trimmed());
+    const bool mqttStarted = linkPool.start(host->text().trimmed(), mqttPort->value(), {connectedRobotId});
     const bool videoStarted = video.start(bindIp->text().trimmed(), quint16(udpPort->value()), ffmpegPath->text().trimmed());
     if (!mqttStarted || !videoStarted) {
         // 任一链路无法创建时立即回滚，避免界面显示"已连接"但后台仍残留半条链路。
-        receiver.stop(); video.stop(); active = false; mqttReady = false;
+        linkPool.stop(); video.stop(); active = false; mqttReady = false;
         stopButton->setEnabled(false); addEvent("连接未启动：请修正 MQTT 或图传参数");
     }
     refresh();
@@ -557,8 +573,9 @@ QJsonObject MainWindow::metrics() const {
     return {{"messages", double(messages)}, {"decoded_frames", double(video.decoded)}, {"udp_packets", double(video.packets)},
         {"robot_id", connectedRobotId}, {"selected_robot_id", robotId->text().toInt()}, {"operator", profile::name(connectedRobotId)},
         {"data_stale", dataStale()}, {"video_stale", videoStale()},
-        {"mqtt_received", double(receiver.receivedMessages)}, {"mqtt_malformed", double(receiver.malformedMessages)},
-        {"last_payload_bytes", receiver.lastPayloadBytes}, {"last_qos", receiver.lastQos},
+        {"mqtt_received", double(linkPool.receivedMessages())}, {"mqtt_malformed", double(linkPool.malformedMessages())},
+        {"last_payload_bytes", linkPool.lastPayloadBytes()}, {"last_qos", linkPool.lastQos()},
+        {"mqtt_link_count", linkPool.robotIds().size()}, {"mqtt_subscribed_topics", linkPool.subscribedTopicCount()},
         {"video_slice_base", video.sliceBase()}, {"video_zero_based_frames", double(video.zeroBasedFrames())},
         {"video_one_based_frames", double(video.oneBasedFrames())}, {"console_page", double(pages->currentIndex())},
         // 单兵模式证据：信息叠加的整体显隐、开关状态、队友面板行数、地图点位与专注全屏状态。

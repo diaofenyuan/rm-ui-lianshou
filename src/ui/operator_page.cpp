@@ -175,8 +175,9 @@ void OperatorPage::applyStageWidth() {
     // 图传是固定 16:9，高度只能由宽度决定，故反过来按"页面高度减去其它行"求宽度上限；
     // 该估算只与页面高度有关，与图传自身尺寸无关，不会形成来回抖动。
     // 留出比布局四舍五入更宽的余量：窄窗口下提示条可能因换行比 sizeHint 多一行，
-    // 宁可让两侧弹簧吃掉一点宽度，也不让定尺寸图传与工具行发生垂直重叠。
-    const int available = qMax(160, height() - chromeHeight() - 24);
+    // 预留布局管理器换行、样式刷新和四舍五入的余量；宁可让两侧弹簧吃掉一点宽度，
+    // 也不让定尺寸图传与工具行发生垂直重叠。紧凑自检要求 1024×720 仍保持可用宽度。
+    const int available = qMax(160, height() - chromeHeight() - 40);
     const int stageWidth = qMin(width(), qMax(320, qRound(available * 16.0 / 9.0)));
     videoStage->setFixedSize(stageWidth, qRound(stageWidth * 9.0 / 16.0));
     hudWidget->setScale(theme::hud::scaleFor(videoStage->height()));

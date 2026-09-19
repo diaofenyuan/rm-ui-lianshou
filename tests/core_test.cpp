@@ -1,6 +1,7 @@
 #include "assembler.h"
 #include "match_state.h"
 #include "map_transform.h"
+#include "receiver.h"
 #include "status.h"
 #include "operator_profile.h"
 #include <QtTest>
@@ -372,6 +373,32 @@ private slots:
         QVERIFY(!m.isStale(MatchState::Domain::RobotStatic));
         QTest::qWait(1600);
         QVERIFY(m.isStale(MatchState::Domain::RobotStatic));
+    }
+    void robotSnapshots() {
+        QCOMPARE(StatusReceiver::singleRobotTopics().size(), 7);
+        QVERIFY(StatusReceiver::singleRobotTopics().contains("RobotPosition"));
+        QVERIFY(!StatusReceiver::allTopics().contains("UnknownTopic"));
+
+        MatchState m;
+        m.setPrimaryRobotId(104);
+        rm::RobotStaticStatus primary; primary.set_robot_id(104); primary.set_max_health(200);
+        rm::RobotStaticStatus teammate; teammate.set_robot_id(3); teammate.set_max_health(150);
+        m.applyStatic(104, primary); m.applyStatic(3, teammate);
+        QVERIFY(m.hasRobot(104)); QVERIFY(m.hasRobot(3));
+        QCOMPARE(m.robot(104)->robotStatic.max_health(), quint32(200));
+        QCOMPARE(m.robot(3)->robotStatic.max_health(), quint32(150));
+        QCOMPARE(m.robot(104)->robotStatic.robot_id(), quint32(104));
+        QVERIFY(m.robotAgeMs(104, MatchState::Domain::RobotStatic) >= 0);
+        QVERIFY(!m.isRobotStale(104, MatchState::Domain::RobotStatic));
+        m.noteRobotLink(3, "mqtt://3");
+        QCOMPARE(m.lastLinkIdFor(3), QString("mqtt://3"));
+
+        rm::RobotDynamicStatus dynamic; dynamic.set_current_health(123);
+        m.applyDynamic(dynamic); // 旧一参 API 仍镜像到主机器人
+        QVERIFY(m.robot(104)->robotDynamic.has_current_health());
+        QCOMPARE(m.robot(104)->robotDynamic.current_health(), quint32(123));
+        m.reset();
+        QVERIFY(!m.hasRobot(104)); QVERIFY(m.lastLinkIdFor(3).isEmpty());
     }
 };
 QTEST_GUILESS_MAIN(CoreTest)

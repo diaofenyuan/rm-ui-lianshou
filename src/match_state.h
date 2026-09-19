@@ -2,7 +2,9 @@
 #include "rm_messages.pb.h"
 #include "status.h"
 #include <QElapsedTimer>
+#include <QHash>
 #include <QObject>
+#include <QString>
 #include <QVector>
 #include <optional>
 
@@ -22,6 +24,28 @@ public:
         Injury, RobotStatic, RobotDynamic, RobotModule, Position, Radar, Penalty };
     qint64 ageMs(Domain domain) const;   // 距该域最近一次更新的毫秒数；从未收到返回 -1
     bool isStale(Domain domain) const;   // 从未收到或超过该域阈值
+
+    // 单机器人状态不再覆盖全局镜像，供总控模式按编号读取各链路的最新快照。
+    struct RobotSnapshot {
+        rm::RobotStaticStatus robotStatic;
+        rm::RobotDynamicStatus robotDynamic;
+        rm::RobotModuleStatus robotModule;
+        rm::RobotPosition position;
+        rm::RobotRespawnStatus respawn;
+        rm::RobotInjuryStat injury;
+        rm::Buff buff;
+        qint64 robotStaticAt = -1, robotDynamicAt = -1, robotModuleAt = -1;
+        qint64 positionAt = -1, respawnAt = -1, injuryAt = -1, buffAt = -1;
+    };
+    void setPrimaryRobotId(int robotId) { primaryRobotId = robotId; }
+    int primaryRobot() const { return primaryRobotId; }
+    const RobotSnapshot *robot(int robotId) const;
+    bool hasRobot(int robotId) const { return robots.contains(robotId); }
+    qint64 robotAgeMs(int robotId, Domain domain) const;
+    bool isRobotStale(int robotId, Domain domain) const;
+    QString lastLinkIdFor(int robotId) const { return linkIds.value(robotId); }
+    void noteRobotLink(int robotId, const QString &linkId) { linkIds.insert(robotId, linkId); }
+    const QHash<int, RobotSnapshot> &robotSnapshots() const { return robots; }
 
     rm::GameStatus game;
     rm::GlobalUnitStatus unitStatus;
@@ -74,11 +98,18 @@ public slots:
     void applyEvent(const rm::Event &value);
     void applyInjury(const rm::RobotInjuryStat &value);
     void applyRespawn(const rm::RobotRespawnStatus &value);
+    void applyInjury(int robotId, const rm::RobotInjuryStat &value);
+    void applyRespawn(int robotId, const rm::RobotRespawnStatus &value);
     void applyStatic(const rm::RobotStaticStatus &value);
     void applyDynamic(const rm::RobotDynamicStatus &value);
     void applyModule(const rm::RobotModuleStatus &value);
     void applyPosition(const rm::RobotPosition &value);
     void applyBuff(const rm::Buff &value);
+    void applyStatic(int robotId, const rm::RobotStaticStatus &value);
+    void applyDynamic(int robotId, const rm::RobotDynamicStatus &value);
+    void applyModule(int robotId, const rm::RobotModuleStatus &value);
+    void applyPosition(int robotId, const rm::RobotPosition &value);
+    void applyBuff(int robotId, const rm::Buff &value);
     void applyPenalty(const rm::PenaltyInfo &value);
     void applyRadar(const rm::RadarInfoToClient &value);
 
@@ -99,6 +130,7 @@ signals:
     void buffsChanged();
     void eventAppended();
     void timelineChanged();
+    void robotsChanged();
 
 private:
     QElapsedTimer clock;
@@ -108,9 +140,20 @@ private:
     QVector<TimedEvent> eventLog;
     QVector<TimedBuff> activeBuffs;
     QVector<TimelineEntry> entries;
+    QHash<int, RobotSnapshot> robots;
+    QHash<int, QString> linkIds;
+    int primaryRobotId = 0;
     void appendTimeline(Category category, const QString &text, bool alert = false);
     void recordHealthChanges(const rm::GlobalUnitStatus &value);
     qint64 stamp(qint64 &target);
+    RobotSnapshot &snapshot(int robotId);
+    bool isPrimary(int robotId) const { return primaryRobotId <= 0 || robotId == primaryRobotId; }
+    void mirrorStatic(const rm::RobotStaticStatus &value);
+    void mirrorDynamic(const rm::RobotDynamicStatus &value);
+    void mirrorModule(const rm::RobotModuleStatus &value);
+    void mirrorPosition(const rm::RobotPosition &value);
+    void mirrorInjury(const rm::RobotInjuryStat &value);
+    void mirrorRespawn(const rm::RobotRespawnStatus &value);
 };
 Q_DECLARE_METATYPE(rm::GlobalUnitStatus)
 Q_DECLARE_METATYPE(rm::GlobalLogisticsStatus)

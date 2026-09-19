@@ -27,9 +27,9 @@ add_custom_command(OUTPUT
     ${CMAKE_CURRENT_SOURCE_DIR}/proto/game_status.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/proto/rm_messages.proto
   DEPENDS protobuf::protoc proto/game_status.proto proto/rm_messages.proto VERBATIM)
-add_library(rm_core src/status.cpp src/assembler.cpp src/receiver.cpp src/video.cpp src/match_state.cpp
+add_library(rm_core src/status.cpp src/assembler.cpp src/receiver.cpp src/robot_link_pool.cpp src/video.cpp src/match_state.cpp
   src/map_transform.cpp
-  src/status.h src/assembler.h src/receiver.h src/video.h src/match_state.h src/map_transform.h
+  src/status.h src/assembler.h src/receiver.h src/robot_link_pool.h src/video.h src/match_state.h src/map_transform.h
   generated/game_status.pb.cc generated/rm_messages.pb.cc)
 target_include_directories(rm_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(rm_core PUBLIC PAHO_MQTT_STATIC=1)

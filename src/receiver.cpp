@@ -2,6 +2,7 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QMetaObject>
+#include <QRandomGenerator>
 
 namespace {
 // 官方表 2-1 的服务器→自定义客户端 topic；topic 名与 Protobuf 消息名一致。
@@ -13,6 +14,18 @@ constexpr const char *const kTopics[] = {
 };
 constexpr int kTopicCount = int(sizeof(kTopics) / sizeof(kTopics[0]));
 constexpr int kMaxPayloadBytes = 65536;
+}
+
+QStringList StatusReceiver::allTopics() {
+    QStringList result;
+    result.reserve(kTopicCount);
+    for (const char *topic : kTopics) result.append(QString::fromLatin1(topic));
+    return result;
+}
+
+QStringList StatusReceiver::singleRobotTopics() {
+    return {"RobotInjuryStat", "RobotRespawnStatus", "RobotStaticStatus",
+        "RobotDynamicStatus", "RobotModuleStatus", "RobotPosition", "Buff"};
 }
 
 StatusReceiver::StatusReceiver(QObject *p) : QObject(p) {
@@ -27,8 +40,9 @@ void StatusReceiver::stop() {
     QCoreApplication::removePostedEvents(this, QEvent::MetaCall);
     emit stateChanged("未连接", false);
 }
-bool StatusReceiver::start(const QString &host, int port, const QString &id) {
+bool StatusReceiver::start(const QString &host, int port, const QString &id, const QStringList &topics) {
     stop();
+    topicFilter = topics;
     receivedMessages = malformedMessages = 0; lastPayloadBytes = 0; lastQos = -1;
     QString endpoint = host.trimmed();
     // MQTT URI 中 IPv6 字面量必须加方括号；主机名和 IPv4 保持原样。
@@ -53,7 +67,7 @@ void StatusReceiver::connectBroker() {
     options.MQTTVersion = MQTTVERSION_3_1_1;
     options.context = this; options.onSuccess = connected; options.onFailure = failed;
     int rc = MQTTAsync_connect(client, &options);
-    if (rc != MQTTASYNC_SUCCESS) { emit stateChanged(QString("连接失败（%1），2 秒后重试").arg(rc), false); retry.start(); }
+    if (rc != MQTTASYNC_SUCCESS) { emit stateChanged(QString("连接失败（%1），约 2 秒后重试").arg(rc), false); scheduleRetry(); }
 }
 void StatusReceiver::connected(void *ctx, MQTTAsync_successData *) {
     auto *s = static_cast<StatusReceiver *>(ctx);
@@ -64,8 +78,10 @@ void StatusReceiver::subscribe() {
     pendingSubscriptions = subscribedCount = 0;
     MQTTAsync_responseOptions opts = MQTTAsync_responseOptions_initializer;
     opts.context = this; opts.onSuccess = subscribed; opts.onFailure = subscriptionFailed;
-    for (const char *topic : kTopics) {
-        if (MQTTAsync_subscribe(client, topic, 1, &opts) == MQTTASYNC_SUCCESS) {
+    const QStringList topics = topicFilter.isEmpty() ? allTopics() : topicFilter;
+    for (const QString &topic : topics) {
+        const auto name = topic.toUtf8();
+        if (MQTTAsync_subscribe(client, name.constData(), 1, &opts) == MQTTASYNC_SUCCESS) {
             ++pendingSubscriptions; ++subscribedCount;
         }
     }
@@ -85,11 +101,17 @@ void StatusReceiver::subscriptionFailed(void *ctx, MQTTAsync_failureData *) {
 }
 void StatusReceiver::failed(void *ctx, MQTTAsync_failureData *data) {
     auto *s = static_cast<StatusReceiver *>(ctx); const int code = data ? data->code : -1;
-    QMetaObject::invokeMethod(s, [s, code] { emit s->stateChanged(QString("MQTT 连接失败（%1），2 秒后重试").arg(code), false); s->retry.start(); }, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(s, [s, code] { emit s->stateChanged(QString("MQTT 连接失败（%1），约 2 秒后重试").arg(code), false); s->scheduleRetry(); }, Qt::QueuedConnection);
 }
 void StatusReceiver::lost(void *ctx, char *) {
     auto *s = static_cast<StatusReceiver *>(ctx);
-    QMetaObject::invokeMethod(s, [s] { emit s->stateChanged("MQTT 断开，2 秒后重连", false); s->retry.start(); }, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(s, [s] { emit s->stateChanged("MQTT 断开，约 2 秒后重连", false); s->scheduleRetry(); }, Qt::QueuedConnection);
+}
+
+void StatusReceiver::scheduleRetry() {
+    if (!client) return;
+    // 多台机器人同时掉线时错开连接，避免集中打满裁判端和本机 MQTT broker。
+    retry.start(2000 + int(QRandomGenerator::global()->bounded(501u)));
 }
 int StatusReceiver::message(void *ctx, char *topic, int topicLen, MQTTAsync_message *msg) {
     auto *s = static_cast<StatusReceiver *>(ctx);

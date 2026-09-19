@@ -49,7 +49,7 @@ void MatchState::reset() {
     robotStatic = {}; robotDynamic = {}; robotModule = {}; position = {}; penalty = {}; radar = {};
     gameAt = unitStatusAt = logisticsAt = mechanismsAt = respawnAt = injuryAt = -1;
     robotStaticAt = robotDynamicAt = robotModuleAt = positionAt = radarAt = penaltyAt = -1;
-    eventLog.clear(); activeBuffs.clear(); entries.clear();
+    eventLog.clear(); activeBuffs.clear(); entries.clear(); robots.clear(); linkIds.clear();
     emit stateReset();
 }
 qint64 MatchState::stamp(qint64 &target) { return target = clock.elapsed(); }
@@ -80,6 +80,32 @@ bool MatchState::isStale(Domain domain) const {
         case Domain::RobotDynamic: return age > kFastStaleMs;
         default: return age > kSlowStaleMs;
     }
+}
+
+MatchState::RobotSnapshot &MatchState::snapshot(int robotId) { return robots[robotId]; }
+const MatchState::RobotSnapshot *MatchState::robot(int robotId) const {
+    const auto it = robots.constFind(robotId);
+    return it == robots.cend() ? nullptr : &it.value();
+}
+qint64 MatchState::robotAgeMs(int robotId, Domain domain) const {
+    const auto *value = robot(robotId);
+    if (!value) return -1;
+    qint64 at = -1;
+    switch (domain) {
+        case Domain::Respawn: at = value->respawnAt; break;
+        case Domain::Injury: at = value->injuryAt; break;
+        case Domain::RobotStatic: at = value->robotStaticAt; break;
+        case Domain::RobotDynamic: at = value->robotDynamicAt; break;
+        case Domain::RobotModule: at = value->robotModuleAt; break;
+        case Domain::Position: at = value->positionAt; break;
+        default: break;
+    }
+    return at < 0 ? -1 : clock.elapsed() - at;
+}
+bool MatchState::isRobotStale(int robotId, Domain domain) const {
+    const qint64 age = robotAgeMs(robotId, domain);
+    if (age < 0) return true;
+    return domain == Domain::RobotDynamic ? age > kFastStaleMs : age > kSlowStaleMs;
 }
 
 void MatchState::appendTimeline(Category category, const QString &text, bool alert) {
@@ -136,8 +162,18 @@ void MatchState::applySpecialMechanism(const rm::GlobalSpecialMechanism &value) 
     }
     mechanisms = value; stamp(mechanismsAt); emit specialMechanismChanged();
 }
-void MatchState::applyInjury(const rm::RobotInjuryStat &value) { injury = value; stamp(injuryAt); emit injuryChanged(); }
-void MatchState::applyRespawn(const rm::RobotRespawnStatus &value) {
+void MatchState::mirrorInjury(const rm::RobotInjuryStat &value) {
+    injury = value; stamp(injuryAt); emit injuryChanged();
+}
+void MatchState::applyInjury(const rm::RobotInjuryStat &value) {
+    if (primaryRobotId > 0) applyInjury(primaryRobotId, value); else mirrorInjury(value);
+}
+void MatchState::applyInjury(int robotId, const rm::RobotInjuryStat &value) {
+    auto &current = snapshot(robotId); current.injury = value; stamp(current.injuryAt);
+    if (isPrimary(robotId)) mirrorInjury(value);
+    emit robotsChanged();
+}
+void MatchState::mirrorRespawn(const rm::RobotRespawnStatus &value) {
     if (respawnAt >= 0 && respawn.has_is_pending_respawn() && value.has_is_pending_respawn()) {
         if (!respawn.is_pending_respawn() && value.is_pending_respawn())
             appendTimeline(Category::Robot, "进入复活读条", true);
@@ -146,9 +182,37 @@ void MatchState::applyRespawn(const rm::RobotRespawnStatus &value) {
     }
     respawn = value; stamp(respawnAt); emit respawnChanged();
 }
-void MatchState::applyStatic(const rm::RobotStaticStatus &value) { robotStatic = value; stamp(robotStaticAt); emit robotStaticChanged(); }
-void MatchState::applyDynamic(const rm::RobotDynamicStatus &value) { robotDynamic = value; stamp(robotDynamicAt); emit robotDynamicChanged(); }
-void MatchState::applyModule(const rm::RobotModuleStatus &value) {
+void MatchState::applyRespawn(const rm::RobotRespawnStatus &value) {
+    if (primaryRobotId > 0) applyRespawn(primaryRobotId, value); else mirrorRespawn(value);
+}
+void MatchState::applyRespawn(int robotId, const rm::RobotRespawnStatus &value) {
+    auto &current = snapshot(robotId); current.respawn = value; stamp(current.respawnAt);
+    if (isPrimary(robotId)) mirrorRespawn(value);
+    emit robotsChanged();
+}
+void MatchState::mirrorStatic(const rm::RobotStaticStatus &value) {
+    robotStatic = value; stamp(robotStaticAt); emit robotStaticChanged();
+}
+void MatchState::applyStatic(const rm::RobotStaticStatus &value) {
+    if (primaryRobotId > 0) applyStatic(primaryRobotId, value); else mirrorStatic(value);
+}
+void MatchState::applyStatic(int robotId, const rm::RobotStaticStatus &value) {
+    auto &current = snapshot(robotId); current.robotStatic = value; stamp(current.robotStaticAt);
+    if (isPrimary(robotId)) mirrorStatic(value);
+    emit robotsChanged();
+}
+void MatchState::mirrorDynamic(const rm::RobotDynamicStatus &value) {
+    robotDynamic = value; stamp(robotDynamicAt); emit robotDynamicChanged();
+}
+void MatchState::applyDynamic(const rm::RobotDynamicStatus &value) {
+    if (primaryRobotId > 0) applyDynamic(primaryRobotId, value); else mirrorDynamic(value);
+}
+void MatchState::applyDynamic(int robotId, const rm::RobotDynamicStatus &value) {
+    auto &current = snapshot(robotId); current.robotDynamic = value; stamp(current.robotDynamicAt);
+    if (isPrimary(robotId)) mirrorDynamic(value);
+    emit robotsChanged();
+}
+void MatchState::mirrorModule(const rm::RobotModuleStatus &value) {
     if (robotModuleAt >= 0) {
         const auto before = moduleStates(robotModule), after = moduleStates(value);
         for (int i = 0; i < before.size() && i < after.size(); ++i) {
@@ -160,7 +224,27 @@ void MatchState::applyModule(const rm::RobotModuleStatus &value) {
     }
     robotModule = value; stamp(robotModuleAt); emit robotModuleChanged();
 }
-void MatchState::applyPosition(const rm::RobotPosition &value) { position = value; ++positionMessages; stamp(positionAt); emit positionChanged(); }
+void MatchState::applyModule(const rm::RobotModuleStatus &value) {
+    if (primaryRobotId > 0) applyModule(primaryRobotId, value); else mirrorModule(value);
+}
+void MatchState::applyModule(int robotId, const rm::RobotModuleStatus &value) {
+    auto &current = snapshot(robotId); current.robotModule = value; stamp(current.robotModuleAt);
+    if (isPrimary(robotId)) mirrorModule(value);
+    emit robotsChanged();
+}
+void MatchState::mirrorPosition(const rm::RobotPosition &value) {
+    position = value; stamp(positionAt); emit positionChanged();
+}
+void MatchState::applyPosition(const rm::RobotPosition &value) {
+    if (primaryRobotId > 0) applyPosition(primaryRobotId, value);
+    else { ++positionMessages; mirrorPosition(value); }
+}
+void MatchState::applyPosition(int robotId, const rm::RobotPosition &value) {
+    auto &current = snapshot(robotId); current.position = value; stamp(current.positionAt);
+    ++positionMessages;
+    if (isPrimary(robotId)) mirrorPosition(value);
+    emit robotsChanged();
+}
 void MatchState::applyPenalty(const rm::PenaltyInfo &value) {
     QString text = "判罚";
     if (value.has_penalty_type()) text += QString("：%1").arg(status::penaltyType(value.penalty_type()));
@@ -187,6 +271,11 @@ void MatchState::applyEvent(const rm::Event &value) {
     emit eventAppended();
 }
 void MatchState::applyBuff(const rm::Buff &value) {
+    if (primaryRobotId > 0) {
+        const int id = value.has_robot_id() ? int(value.robot_id()) : primaryRobotId;
+        applyBuff(id, value);
+        return;
+    }
     // 同一机器人同一类型的 Buff 以最新消息为准；剩余时间归零表示失效，直接移除。
     const bool expired = value.has_buff_left_time() && value.buff_left_time() == 0;
     for (int i = 0; i < activeBuffs.size(); ++i) {
@@ -202,6 +291,27 @@ void MatchState::applyBuff(const rm::Buff &value) {
     activeBuffs.append(entry);
     while (activeBuffs.size() > kBuffLimit) activeBuffs.removeFirst();
     emit buffsChanged();
+}
+void MatchState::applyBuff(int robotId, const rm::Buff &value) {
+    auto &current = snapshot(robotId); current.buff = value; stamp(current.buffAt);
+    const bool expired = value.has_buff_left_time() && value.buff_left_time() == 0;
+    for (int i = 0; i < activeBuffs.size(); ++i) {
+        const auto &existing = activeBuffs[i].buff;
+        const bool sameRobot = existing.has_robot_id() && value.has_robot_id()
+            ? existing.robot_id() == value.robot_id() : (!existing.has_robot_id() || !value.has_robot_id());
+        if (!sameRobot || (existing.has_buff_type() && value.has_buff_type()
+            && existing.buff_type() != value.buff_type())) continue;
+        if (expired) activeBuffs.removeAt(i); else activeBuffs[i] = {clock.elapsed(), value};
+        emit buffsChanged(); emit robotsChanged();
+        return;
+    }
+    if (!expired) {
+        TimedBuff entry; entry.at = clock.elapsed(); entry.buff = value;
+        activeBuffs.append(entry);
+        while (activeBuffs.size() > kBuffLimit) activeBuffs.removeFirst();
+        emit buffsChanged();
+    }
+    emit robotsChanged();
 }
 
 // robot_health 前 5 项是我方：越界或消息只带部分槽位时返回空值，由界面显示"未提供"，

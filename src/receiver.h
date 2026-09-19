@@ -3,18 +3,24 @@
 #include "status.h"
 #include <MQTTAsync.h>
 #include <QObject>
+#include <QStringList>
 #include <QTimer>
 
-// 订阅 RM2026 V2.0.0 表 2-1 全部“服务器→自定义客户端”topic（topic 名 = Protobuf 消息名），
-// 按 topic 解析并发出类型化信号；断线 2 秒重连后重新订阅全部 topic。
+// 按 topic 解析并发出类型化信号；默认订阅 RM2026 V2.0.0 表 2-1 全部 topic，
+// 也可传入单机域子集供 RobotLinkPool 使用；断线约 2 秒（带抖动）后重新订阅。
 class StatusReceiver : public QObject {
     Q_OBJECT
 public:
     explicit StatusReceiver(QObject *parent = nullptr);
     ~StatusReceiver();
     // 返回值只表示本地 MQTT 客户端是否创建成功；网络连接仍通过 stateChanged 异步报告。
-    bool start(const QString &host, int port, const QString &robotId);
+    bool start(const QString &host, int port, const QString &robotId,
+        const QStringList &topics = {});
     void stop();
+    static QStringList allTopics();
+    // 非主链路只接收能按 robot_id 归集的单机器人域，避免全局 topic 被重复消费。
+    static QStringList singleRobotTopics();
+    int subscribedTopicCount() const { return subscribedCount; }
     quint64 receivedMessages = 0;
     quint64 malformedMessages = 0;
     int lastPayloadBytes = 0;
@@ -42,7 +48,9 @@ private:
     QTimer retry;
     int pendingSubscriptions = 0;
     int subscribedCount = 0;
+    QStringList topicFilter;
     void connectBroker();
+    void scheduleRetry();
     void subscribe();
     void dispatch(const QByteArray &topic, const QByteArray &payload, int payloadBytes, int qos);
     template <typename T> void emitParsed(const QByteArray &payload, void (StatusReceiver::*signal)(T));
