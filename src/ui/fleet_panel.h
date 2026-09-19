@@ -13,7 +13,7 @@ public:
     void setOwnRobot(int id);
     QString summaryText() const;
     int rowCount() const { return robotIds.size(); }
-    QSize minimumSizeHint() const override { return {300, 390}; }
+    QSize minimumSizeHint() const override { return {180, 250}; }
 protected:
     void paintEvent(QPaintEvent *) override;
 private:

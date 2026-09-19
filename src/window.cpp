@@ -106,14 +106,19 @@ MainWindow::MainWindow(QString ffmpeg) {
     titles->addWidget(label("RoboMaster 单兵客户端", "title"));
     operatorIdentity = label("红方 · 3 号步兵 / 待连接", "muted"); titles->addWidget(operatorIdentity);
     header->addStretch();
-    viewButton = new QPushButton("单兵模式  Ctrl+Tab");
+    viewButton = new QPushButton("单兵模式");
     viewButton->setToolTip("在总控模式与单兵模式之间切换");
     header->addWidget(viewButton, 0, Qt::AlignVCenter);
+    settingsButton = new QPushButton("连接设置");
+    settingsButton->setCheckable(true);
+    header->addWidget(settingsButton, 0, Qt::AlignVCenter);
     sourceBadge = label("本地模拟", "badge"); header->addWidget(sourceBadge, 0, Qt::AlignVCenter);
     header->addWidget(label("RM2026 · V2.0.0", "muted"));
 
     auto *body = new QHBoxLayout; body->setSpacing(16); layout->addLayout(body, 1);
-    pages = new QStackedWidget; body->addWidget(pages, 1);
+    pages = new QStackedWidget;
+    pages->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    body->addWidget(pages, 1);
     consolePage = new ConsolePage(&match, &linkPool); pages->addWidget(consolePage);
     operatorPage = new OperatorPage(&match); pages->addWidget(operatorPage);
     // 接收统计仍由主窗口持有（内容与图传/接收计数耦合），但摆在单兵模式页面内部，
@@ -344,7 +349,17 @@ MainWindow::MainWindow(QString ffmpeg) {
     connect(operatorPage->fullScreenButton(), &QPushButton::clicked, this, &MainWindow::toggleFullScreen);
     connect(new QShortcut(QKeySequence("F11"), this), &QShortcut::activated, this, &MainWindow::toggleFullScreen);
     connect(viewButton, &QPushButton::clicked, this, &MainWindow::switchView);
-    connect(new QShortcut(QKeySequence("Ctrl+Tab"), this), &QShortcut::activated, this, &MainWindow::switchView);
+    connect(new QShortcut(QKeySequence("Ctrl+Tab"), this), &QShortcut::activated, this, [this] {
+        QWidget *focused = QApplication::focusWidget();
+        if (qobject_cast<QPlainTextEdit *>(focused) || qobject_cast<QLineEdit *>(focused)
+            || qobject_cast<QAbstractSpinBox *>(focused)) return;
+        if (pages->currentWidget() == consolePage) consolePage->cycleFocus();
+    });
+    connect(new QShortcut(QKeySequence("Ctrl+Shift+Tab"), this), &QShortcut::activated, this, &MainWindow::switchView);
+    viewButton->setToolTip("切换模式：Ctrl+Shift+Tab；总控观察轮换：Ctrl+Tab");
+    connect(settingsButton, &QPushButton::toggled, this, [this] { updatePageChrome(); });
+    connect(pages, &QStackedWidget::currentChanged, this, [this] { updatePageChrome(); });
+    updatePageChrome();
     connect(new QShortcut(QKeySequence("Esc"), this), &QShortcut::activated, this, &MainWindow::leaveFullscreenOrFocus);
     connect(new QShortcut(QKeySequence("M"), this), &QShortcut::activated, this, &MainWindow::toggleMap);
     updateProfile();
@@ -379,6 +394,7 @@ void MainWindow::updateProfile() {
         .arg(active ? "当前连接" : previous ? "已断开，保留上次画面" : "待连接"));
     // 编辑下一次连接的操作位时，不改写旧画面的来源身份。
     operatorPage->setRobot(displayedId);
+    if (!active && !previous) consolePage->setRobot(id);
     operatorPage->refresh();
 }
 
@@ -389,7 +405,7 @@ void MainWindow::setFocusMode(bool enabled) {
     const QSignalBlocker block(operatorPage->focusButton());
     operatorPage->focusButton()->setChecked(enabled);
     operatorPage->focusButton()->setText(enabled ? "退出专注  F10" : "专注  F10");
-    sidebar->setVisible(!enabled); logPanel->setVisible(!enabled);
+    updatePageChrome();
     diagnostics->setVisible(!enabled && !logToggle->isChecked());
     operatorPage->setFocused(enabled);
     if (enabled) { showFullScreen(); operatorPage->focusButton()->setFocus(); }
@@ -410,6 +426,14 @@ void MainWindow::toggleFullScreen() {
 }
 
 void MainWindow::leaveFullscreenOrFocus() {
+    if (pages->currentWidget() == consolePage && consolePage->mapFocusMode()) {
+        consolePage->setMapFocus(false);
+        return;
+    }
+    if (pages->currentWidget() == consolePage && consolePage->supportDrawer()->isVisible()) {
+        consolePage->closeSupport();
+        return;
+    }
     // 专注态含全屏，必须先判专注：否则会出现"退了全屏但仍在专注态"的中间错误状态。
     if (focusMode) setFocusMode(false);
     else if (isFullScreen()) toggleFullScreen();
@@ -485,8 +509,17 @@ void MainWindow::switchView() {
     const bool toConsole = pages->currentWidget() != consolePage;
     pages->setCurrentIndex(toConsole ? 0 : 1);
     // 按钮文案始终显示切换目标：当前是总控模式时提示可切到单兵模式。
-    viewButton->setText(toConsole ? "单兵模式  Ctrl+Tab" : "总控模式  Ctrl+Tab");
+    viewButton->setText(toConsole ? "单兵模式" : "总控模式");
     refresh();
+}
+
+void MainWindow::updatePageChrome() {
+    const bool console = pages->currentWidget() == consolePage;
+    // 总控首屏把连接表单与接收日志收起，需要时由顶部入口展开。
+    sidebar->setVisible(!focusMode && (!console || settingsButton->isChecked()));
+    logPanel->setVisible(!focusMode && (!console || settingsButton->isChecked()));
+    settingsButton->setVisible(console);
+    viewButton->setText(console ? "单兵模式" : "总控模式");
 }
 
 bool MainWindow::validateForm() {
@@ -500,7 +533,7 @@ bool MainWindow::validateForm() {
     else if (QHostAddress(bindIp->text().trimmed()).isNull()) { invalid = bindIp; message = "请填写有效的本机监听 IP。"; }
     else if (ffmpegPath->text().trimmed().isEmpty()) { invalid = ffmpegPath; message = "请选择 FFmpeg 程序。"; }
     if (!invalid) return true;
-    setFocusMode(false); advancedToggle->setChecked(true);
+    setFocusMode(false); settingsButton->setChecked(true); advancedToggle->setChecked(true);
     invalid->setProperty("invalid", true); invalid->style()->unpolish(invalid); invalid->style()->polish(invalid);
     auto *fieldLayout = qobject_cast<QVBoxLayout *>(invalid->parentWidget()->layout());
     fieldLayout->insertWidget(fieldLayout->indexOf(invalid)+1, formError);
@@ -598,6 +631,8 @@ QJsonObject MainWindow::metrics() const {
         {"console_timeline", double(match.timeline().size())}, {"console_markers", double(consolePage->map()->markerCount())},
         {"console_fleet_rows", consolePage->fleetPanel()->rowCount()}, {"console_fleet_height", consolePage->fleetPanel()->height()},
         {"console_link_rows", consolePage->linkPoolPanel()->rowCount()}, {"console_link_height", consolePage->linkPoolPanel()->height()},
+        {"console_map_focus", consolePage->mapFocusMode()}, {"console_support_drawer", consolePage->supportDrawer()->isVisible()},
+        {"console_video_height", consolePage->videoPreview()->height()},
         {"console_video_preview", consolePage->videoPreview()->hasFrame()},
         {"console_analysis", consolePage->analysis()->statusText()},
         {"console_respawn", consolePage->respawnState()->statusText()},
@@ -647,12 +682,13 @@ bool MainWindow::runUiChecks(const QString &evidencePrefix) {
     pages->setCurrentWidget(consolePage);
     settle();
     const bool consoleMapWasOn = consolePage->mapVisible();
+    const bool consoleMapFocusWasOn = consolePage->mapFocusMode();
     // 自检不应受上一次用户偏好影响；结束时恢复原始状态，避免测试改变实际 UI 偏好。
+    consolePage->setMapFocus(false);
     consolePage->setMapVisible(true); settle();
     okay = pages->currentWidget() == consolePage && consolePage->scoreBar()->isVisible()
         && consolePage->allyList()->isVisible() && consolePage->enemyList()->isVisible()
-        && consolePage->map()->isVisible() && consolePage->respawnState()->isVisible()
-        && consolePage->events()->isVisible() && consolePage->analysis()->isVisible()
+        && consolePage->map()->isVisible() && !consolePage->supportDrawer()->isVisible()
         && consolePage->videoPreview()->isVisible()
         && consolePage->allyList()->rowCount() == 7 && consolePage->enemyList()->rowCount() == 5
         && consolePage->linkPoolPanel()->rowCount() == 7 && okay;
@@ -666,7 +702,14 @@ bool MainWindow::runUiChecks(const QString &evidencePrefix) {
     if (match.ageMs(MatchState::Domain::Respawn) >= 0)
         okay = consolePage->respawnState()->statusText() != "未收到复活数据" && okay;
     if (operatorPage->stage()->hasFrame()) okay = consolePage->videoPreview()->hasFrame() && okay;
-    // 总控模式中央地图同样由 M 键开关，此时必须切的是总控模式自己的地图。
+    // 总控模式的 M 键进入地图聚焦：地图保留，两侧列表与支援条收起。
+    consolePage->toggleMap(); settle();
+    okay = consolePage->map()->isVisible() && !consolePage->allyList()->isVisible()
+        && !consolePage->enemyList()->isVisible() && okay;
+    consolePage->toggleMap(); settle();
+    okay = consolePage->map()->isVisible() && consolePage->allyList()->isVisible()
+        && consolePage->enemyList()->isVisible() && okay;
+    // 兼容旧的显隐接口，确保外部诊断仍能直接检查地图控件。
     consolePage->setMapVisible(false); settle();
     okay = !consolePage->map()->isVisible() && okay;
     consolePage->setMapVisible(true); settle();
@@ -760,6 +803,7 @@ bool MainWindow::runUiChecks(const QString &evidencePrefix) {
     okay = !isFullScreen() && operatorPage->hudVisible() && okay;
     operatorPage->overlayToggle()->setChecked(hudWasOn); settle();
     operatorPage->setMapVisible(mapWasOn); settle();
+    consolePage->setMapFocus(consoleMapFocusWasOn); settle();
     consolePage->setMapVisible(consoleMapWasOn); settle();
     checkpoint(okay, "纯全屏与 HUD 显隐");
 

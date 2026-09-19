@@ -11,7 +11,7 @@ public:
     void setOwnRobot(int id);            // 0 表示未连接
     QString summaryText() const;         // 面板标题行的存活摘要
     int rowCount() const;
-    QSize minimumSizeHint() const override { return {215, 170}; }
+    QSize minimumSizeHint() const override { return {170, 170}; }
 protected:
     void paintEvent(QPaintEvent *) override;
 private:

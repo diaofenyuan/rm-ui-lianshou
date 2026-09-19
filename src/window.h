@@ -46,6 +46,7 @@ private:
     QLineEdit *host, *bindIp, *robotId, *ffmpegPath;
     QSpinBox *mqttPort, *udpPort;
     QPushButton *connectButton, *stopButton, *copyButton, *viewButton;
+    QPushButton *settingsButton;
     QToolButton *advancedToggle, *logToggle;
     QCheckBox *pauseLog;
     QLabel *connection, *dataState, *videoState, *sourceBadge, *formError;
@@ -77,4 +78,5 @@ private:
     void recordMatchChanges(const rm::GameStatus &value);
     void refreshStatusDetails();
     void refresh();
+    void updatePageChrome();
 };

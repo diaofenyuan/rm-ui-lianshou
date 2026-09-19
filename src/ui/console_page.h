@@ -9,21 +9,30 @@
 #include "robot_list.h"
 #include "score_bar.h"
 #include "video_preview.h"
+#include <QComboBox>
 #include <QLabel>
+#include <QStackedWidget>
 #include <QTimer>
+#include <QToolButton>
 #include <QWidget>
 
-// 总控模式页面：顶栏比分条 + 我方/敌方机器人列表 + 中央战术地图与复活状态 + 底部事件、分析、图传与连接池。
-// 数据域信号与 200ms 时效轮询都会触发本页刷新；图传帧由 MainWindow 投递。
+// 总控模式页面：顶部指挥条 + 我方/敌方机器人列表 + 中央战术地图 + 单路完整图传。
+// 低频事件、分析、复活和连接诊断默认收进支援抽屉；数据域信号与 200ms 时效轮询都会触发本页刷新。
 class ConsolePage : public QWidget {
     Q_OBJECT
 public:
     explicit ConsolePage(MatchState *state, RobotLinkPool *pool, QWidget *parent = nullptr);
     void setRobot(int id);
-    // M 键在本模式的落点：开关中央战术地图（单兵模式的 M 键切右上角 HUD 地图）。
+    void selectFocus(int id);
+    int focusedRobot() const { return focusId; }
+    int sourceRobot() const { return sourceId; }
+    void cycleFocus();
+    // M 键在总控模式进入/退出地图聚焦，保留地图并收起两侧低频信息。
     void setMapVisible(bool visible);
     void toggleMap();
     bool mapVisible() const;
+    bool mapFocusMode() const { return mapFocus; }
+    void setMapFocus(bool enabled);
     ScoreBar *scoreBar() const { return bar; }
     FleetPanel *allyList() const { return fleet; }
     FleetPanel *fleetPanel() const { return fleet; }
@@ -34,6 +43,14 @@ public:
     EventTimelinePanel *events() const { return timeline; }
     AnalysisPanel *analysis() const { return analysisPanel; }
     VideoPreviewPanel *videoPreview() const { return videoPanel; }
+    QComboBox *focusSelector() const { return focusCombo; }
+    QWidget *supportDrawer() const { return drawer; }
+    void openSupport(int index);
+    void closeSupport();
+signals:
+    void reconnectRequested(int id);
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 private:
     MatchState *match;
     ScoreBar *bar;
@@ -41,7 +58,28 @@ private:
     RobotListPanel *enemy;
     LinkPoolPanel *linkPanel;
     MinimapPanel *minimap;
-    QWidget *mapPanel;                   // 包裹 minimap 的面板容器：M 键隐藏的是整块，不是只藏图
+    QWidget *mapPanel;
+    QWidget *workArea = nullptr;
+    QWidget *allyPanel = nullptr;
+    QWidget *rightColumn = nullptr;
+    QWidget *enemyPanel = nullptr;
+    QWidget *videoContainer = nullptr;
+    QWidget *commandBar = nullptr;
+    QWidget *supportBar = nullptr;
+    QWidget *drawer = nullptr;
+    QStackedWidget *drawerStack = nullptr;
+    QVector<QToolButton *> supportButtons;
+    QToolButton *reconnectButton = nullptr;
+    QToolButton *allyToggle = nullptr;
+    QToolButton *enemyToggle = nullptr;
+    QComboBox *focusCombo = nullptr;
+    QLabel *focusMeta = nullptr;
+    QLabel *videoMeta = nullptr;
+    QLabel *supportSummary = nullptr;
+    QLabel *healthSummary = nullptr;
+    RobotLinkPool *pool = nullptr;
+    int sourceId = 0, focusId = 0;
+    bool mapFocus = false;
     RespawnPanel *respawnPanel;
     EventTimelinePanel *timeline;
     AnalysisPanel *analysisPanel;
@@ -49,4 +87,6 @@ private:
     QLabel *allySummary, *enemySummary, *analysisSummary, *linkSummary;
     QTimer ticker;
     void refresh();
+    void updateFocusUi();
+    void layoutWorkArea();
 };
