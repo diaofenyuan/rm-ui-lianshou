@@ -12,6 +12,10 @@ class MinimapPanel : public QWidget {
 public:
     explicit MinimapPanel(MatchState *state, QWidget *parent = nullptr);
     void setOwnRobot(int id);            // 0 表示未连接；蓝方视角在 id > 100 时启用
+    // HUD 模式：叠在单兵模式图传之上时改用深色半透明卡底、紧凑页脚与浅色文字。
+    // 底图与坐标换算与总控模式完全共用，不因显示场景改变口径。
+    void setHudMode(bool enabled);
+    bool hudMode() const { return hud; }
     int markerCount() const;             // 供界面自检与证据使用
     bool hasAnyData() const;             // 是否收到过位置或雷达数据
     QSize minimumSizeHint() const override { return {260, 180}; }
@@ -29,6 +33,7 @@ private:
     QColor teamColor(bool enemy) const;
     MatchState *match;
     bool allyBlue = false;
+    bool hud = false;
     int ownNumber = 0;
     mutable QPixmap bitmap;              // 延迟加载的底图原图
     mutable QPixmap rendered;            // 按控件尺寸与视角缓存的底图

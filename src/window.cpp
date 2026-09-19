@@ -2,22 +2,27 @@
 #include "theme.h"
 #include "operator_profile.h"
 #include <QApplication>
+#include <QAbstractSpinBox>
 #include <QClipboard>
 #include <QDateTime>
 #include <QFileDialog>
+#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QPainter>
-#include <QPainterPath>
 #include <QScrollBar>
 #include <QScreen>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QTextStream>
+#include <QVBoxLayout>
 
 namespace {
+// 比赛信息与图传的过期阈值：两者都用 1.5 秒口径，与 MatchState 的快速域一致。
+constexpr qint64 kStaleMs = 1500;
+
 void chevron(QPainter &p, const QPointF &center, bool up = false) {
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(QPen(theme::muted, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
@@ -82,168 +87,12 @@ void field(QVBoxLayout *layout, const QString &text, QWidget *control) {
     layout->addWidget(caption);
     layout->addWidget(control);
 }
-void fitText(QPainter &p, const QRect &rect, const QString &text, int pixels, bool numeric = false) {
-    auto font = theme::font(pixels, true, numeric);
-    // 异常大数值仍保留原值；先缩小字号，再省略超长内容，避免越过相邻比分。
-    while (pixels > 13 && QFontMetrics(font).horizontalAdvance(text) > rect.width()) {
-        font.setPixelSize(--pixels);
-    }
-    p.setFont(font);
-    p.drawText(rect, Qt::AlignCenter, QFontMetrics(font).elidedText(text, Qt::ElideRight, rect.width()));
-}
-}
-
-MatchSummary::MatchSummary(const VideoCanvas *source) : source(source) {
-    setFixedHeight(100);
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    setAccessibleName("比赛概览：红蓝得分、阶段和倒计时");
-}
-
-void MatchSummary::paintEvent(QPaintEvent *) {
-    QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
-    const auto &data = source->data;
-    const int side = qMin(160, width()/4), middle = width()-2*side;
-    p.setPen(Qt::NoPen); p.setBrush(QColor("#F4F7FA")); p.drawRoundedRect(rect(), 8, 8);
-    p.setBrush(QColor("#FCEEF1")); p.drawRoundedRect(QRect(0, 0, side, 70), 8, 8);
-    p.setBrush(QColor("#EDF4FD")); p.drawRoundedRect(QRect(width()-side, 0, side, 70), 8, 8);
-    // 比分左右固定为红方 / 蓝方，本方一侧加"我方"标注，避免与顶部身份行对不上。
-    const QString redCaption = source->allyBlue ? QString("红方得分") : QString("红方得分 · 我方");
-    const QString blueCaption = source->allyBlue ? QString("蓝方得分 · 我方") : QString("蓝方得分");
-    p.setPen(theme::red); p.setFont(theme::font(12, true));
-    p.drawText(QRect(8, 8, side-16, 20), Qt::AlignCenter, redCaption);
-    fitText(p, QRect(8, 30, side-16, 38), data.has_red_score() ? QString::number(data.red_score()) : "—", 34, true);
-    p.setPen(theme::blue); p.setFont(theme::font(12, true));
-    p.drawText(QRect(width()-side+8, 8, side-16, 20), Qt::AlignCenter, blueCaption);
-    fitText(p, QRect(width()-side+8, 30, side-16, 38), data.has_blue_score() ? QString::number(data.blue_score()) : "—", 34, true);
-    QString state = source->hasData && data.has_current_stage() ? status::stage(data.current_stage()) : "等待比赛信息";
-    if (source->hasData && source->stale) state += " · 已过期";
-    else if (data.has_is_paused()) state += data.is_paused() ? " · 已暂停" : " · 未暂停";
-    p.setPen(source->stale ? theme::warning : theme::muted); p.setFont(theme::font(12));
-    p.drawText(QRect(side+8, 8, middle-16, 20), Qt::AlignCenter, p.fontMetrics().elidedText(state, Qt::ElideRight, middle-16));
-    const bool urgent = !source->stale && data.has_current_stage() && data.current_stage() == 4
-        && data.has_is_paused() && !data.is_paused() && data.has_stage_countdown_sec()
-        && data.stage_countdown_sec() >= 0 && data.stage_countdown_sec() <= 10;
-    p.setPen(urgent ? theme::red : theme::text);
-    fitText(p, QRect(side+8, 29, middle-16, 42), data.has_stage_countdown_sec() ? status::duration(data.stage_countdown_sec()) : "--:--", 38, true);
-    const QString round = QString("第 %1 / %2 局").arg(data.has_current_round() ? QString::number(data.current_round()) : "—")
-        .arg(data.has_total_rounds() ? QString::number(data.total_rounds()) : "—");
-    QString detail = round + "     阶段已过 " + (data.has_stage_elapsed_sec() ? status::duration(data.stage_elapsed_sec()) : "--:--");
-    if (source->hasData && !data.has_is_paused()) detail += " · 暂停状态未提供";
-    if (data.has_current_stage() && data.current_stage() == 5) {
-        detail = round + " · " + (data.has_game_result() ? status::result(data.game_result()) : "胜者未提供")
-            + " / " + (data.has_end_reason() ? status::reason(data.end_reason()) : "原因未提供");
-    }
-    p.setPen(theme::muted); p.setFont(theme::font(11));
-    p.drawText(QRect(12, 74, width()-24, 22), Qt::AlignCenter, p.fontMetrics().elidedText(detail, Qt::ElideRight, width()-24));
-}
-
-VideoCanvas::VideoCanvas(QWidget *parent) : QWidget(parent) {
-    setMinimumSize(440, 160);
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    setAccessibleName("比赛图传与比分");
-}
-
-void VideoCanvas::paintEvent(QPaintEvent *) {
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
-    QPainterPath clip;
-    clip.addRoundedRect(QRectF(rect()), 8, 8);
-    p.setClipPath(clip);
-    p.fillRect(rect(), QColor("#142330"));
-    // 画面按等比居中绘制：记下实际绘制矩形，断流提示与叠加面板都以它为基准，
-    // 不再以画布矩形定位，避免落在画面之外的空白上或偏出画面。
-    QRect imageRect;
-    if (!image.isNull()) {
-        const auto size = image.size().scaled(this->size(), Qt::KeepAspectRatio);
-        imageRect = QRect(QPoint((width()-size.width())/2, (height()-size.height())/2), size);
-        p.drawImage(imageRect, image);
-    } else {
-        p.setPen(QColor("#203440"));
-        for (int x = 0; x < width(); x += 40) p.drawLine(x, 0, x, height());
-        for (int y = 0; y < height(); y += 40) p.drawLine(0, y, width(), y);
-        const QPoint center(width()/2, height()/2 + (height() < 240 ? -30 : 12));
-        p.setPen(QPen(QColor("#94ACA9"), 2));
-        p.setBrush(Qt::NoBrush);
-        p.drawRoundedRect(QRect(center.x()-22, center.y()-34, 34, 27), 5, 5);
-        p.drawPolyline(QPolygon({QPoint(center.x()+12, center.y()-26), QPoint(center.x()+24, center.y()-32),
-                                QPoint(center.x()+24, center.y()-9), QPoint(center.x()+12, center.y()-15)}));
-        p.setPen(QColor("#EDF4F7")); p.setFont(theme::font(19, true));
-        p.drawText(QRect(16, center.y()+4, width()-32, 30), Qt::AlignCenter, "准备接收图传");
-        p.setPen(QColor("#AEBDC8")); p.setFont(theme::font(12));
-        p.drawText(QRect(16, center.y()+39, width()-32, 24), Qt::AlignCenter,
-                   simulation ? "启动本地演示后，连接数据与图传" : "检查图传接线与本机监听 IP，然后连接");
-    }
-
-    // 来源与操作位铭牌移到画布下方工具行，画面区域内不再绘制常驻底条。
-    if (videoStale && !image.isNull()) {
-        // 断流提示贴在画面左上角，尽量少压画面内容。
-        const QString text = "图传已中断 · 当前为最后一帧";
-        p.setFont(theme::font(12));
-        const int pillWidth = qMin(imageRect.width()-24, p.fontMetrics().horizontalAdvance(text)+28);
-        const QRect pill(imageRect.left()+12, imageRect.top()+12, pillWidth, 30);
-        p.setPen(Qt::NoPen); p.setBrush(QColor(32, 28, 23, 235));
-        p.drawRoundedRect(pill, 6, 6);
-        p.setPen(QColor("#F4D197"));
-        p.drawText(pill, Qt::AlignCenter, p.fontMetrics().elidedText(text, Qt::ElideRight, pillWidth-16));
-    }
-    if (!overlay || (!hasData && image.isNull())) return;
-    // 叠加面板锚定实际画面矩形，宽扁画布下不会偏出画面之外。
-    const QRect frame = image.isNull() ? rect() : imageRect;
-    const bool compact = frame.height() < 280;
-    const int w = qMin(frame.width()-32, 540), x = frame.left()+(frame.width()-w)/2;
-    const int side = w/4;
-    const int panelTop = frame.top() + (compact ? 12 : 16);
-    const int captionY = panelTop + (compact ? 5 : 8), valueY = panelTop + (compact ? 24 : 28);
-    const int valueHeight = compact ? 31 : 38;
-    const int roundY = panelTop + (compact ? 54 : 71), noteY = panelTop + (compact ? 81 : 110);
-    p.setPen(QColor(210, 220, 229, 230)); p.setBrush(QColor(255, 255, 255, 245));
-    p.drawRoundedRect(QRect(x, panelTop, w, compact ? 76 : 104), 10, 10);
-    p.setPen(Qt::NoPen); p.setBrush(theme::red); p.drawRoundedRect(QRect(x+12, captionY+7, 3, 36), 1, 1);
-    p.setBrush(theme::blue); p.drawRoundedRect(QRect(x+w-15, captionY+7, 3, 36), 1, 1);
-    // 红方在左、蓝方在右，本方一侧加"我方"标注，与上方比赛概览口径一致。
-    const QString allyTag = " · 我方";
-    p.setFont(theme::font(11)); p.setPen(theme::red);
-    p.drawText(QRect(x+20, captionY, side-24, 20), Qt::AlignCenter,
-               allyBlue ? QString("红方得分") : QString("红方得分") + allyTag);
-    p.setPen(theme::blue); p.drawText(QRect(x+w-side+4, captionY, side-24, 20), Qt::AlignCenter,
-               allyBlue ? QString("蓝方得分") + allyTag : QString("蓝方得分"));
-    p.setPen(theme::red);
-    fitText(p, QRect(x+20, valueY, side-24, valueHeight), data.has_red_score() ? QString::number(data.red_score()) : "—", compact ? 26 : 32, true);
-    p.setPen(theme::blue);
-    fitText(p, QRect(x+w-side+4, valueY, side-24, valueHeight), data.has_blue_score() ? QString::number(data.blue_score()) : "—", compact ? 26 : 32, true);
-    QString phase = hasData && data.has_current_stage() ? status::stage(data.current_stage()) : "等待比赛信息";
-    if (hasData && data.has_is_paused()) phase += data.is_paused() ? " · 已暂停" : " · 未暂停";
-    p.setPen(hasData && data.has_is_paused() && data.is_paused() ? theme::warning : theme::muted);
-    p.setFont(theme::font(11));
-    p.drawText(QRect(x+side, captionY, w-2*side, 20), Qt::AlignCenter, p.fontMetrics().elidedText(phase, Qt::ElideRight, w-2*side));
-    p.setPen(theme::text);
-    fitText(p, QRect(x+side, valueY, w-2*side, valueHeight), data.has_stage_countdown_sec() ? status::duration(data.stage_countdown_sec()) : "--:--", compact ? 26 : 32, true);
-    const QString round = hasData ? QString("第 %1 / %2 局")
-        .arg(data.has_current_round() ? QString::number(data.current_round()) : "—")
-        .arg(data.has_total_rounds() ? QString::number(data.total_rounds()) : "—") : "GameStatus";
-    p.setPen(theme::muted); p.setFont(theme::font(11));
-    p.drawText(QRect(x+12, roundY, w-24, compact ? 20 : 23), Qt::AlignCenter, round);
-
-    QString note;
-    if (hasData) {
-        note = stale ? "比赛信息已过期 · 等待更新" : "已过 " + (data.has_stage_elapsed_sec() ? status::duration(data.stage_elapsed_sec()) : "--:--");
-        if (data.has_current_stage() && data.current_stage() == 5) {
-            note += " · " + (data.has_game_result() ? status::result(data.game_result()) : "胜者未提供");
-            note += " / " + (data.has_end_reason() ? status::reason(data.end_reason()) : "原因未提供");
-        } else if (!data.has_is_paused()) {
-            note += " · 暂停状态未提供";
-        }
-        p.setPen(Qt::NoPen); p.setBrush(QColor(255, 255, 255, 245));
-        p.drawRoundedRect(QRect(x, noteY, w, compact ? 23 : 27), 5, 5);
-        p.setPen(stale ? theme::warning : theme::muted); p.setFont(theme::font(11));
-        p.drawText(QRect(x+10, noteY, w-20, compact ? 23 : 27), Qt::AlignCenter, p.fontMetrics().elidedText(note, Qt::ElideRight, w-20));
-    }
 }
 
 MainWindow::MainWindow(QString ffmpeg) {
     setWindowTitle("RoboMaster · 单兵客户端");
     // 最小高度需保证图传不被下方工具行与日志压住（自检项"最小窗口布局"），
-    // 宽度按"配置栏 + 总控台三列"的最小需求给。
+    // 宽度按"配置栏 + 单兵模式 HUD"的最小需求给。
     setMinimumSize(1024, 720);
     // 默认按可用屏幕取景：1366×768 / 1280×720 上不再把配置栏底部（端口、FFmpeg 路径）顶到屏幕外。
     const QRect available = QGuiApplication::primaryScreen()->availableGeometry();
@@ -257,8 +106,8 @@ MainWindow::MainWindow(QString ffmpeg) {
     titles->addWidget(label("RoboMaster 单兵客户端", "title"));
     operatorIdentity = label("红方 · 3 号步兵 / 待连接", "muted"); titles->addWidget(operatorIdentity);
     header->addStretch();
-    viewButton = new QPushButton("单兵视角  Ctrl+Tab");
-    viewButton->setToolTip("在总控台与单兵视角之间切换");
+    viewButton = new QPushButton("单兵模式  Ctrl+Tab");
+    viewButton->setToolTip("在总控模式与单兵模式之间切换");
     header->addWidget(viewButton, 0, Qt::AlignVCenter);
     sourceBadge = label("本地模拟", "badge"); header->addWidget(sourceBadge, 0, Qt::AlignVCenter);
     header->addWidget(label("RM2026 · V2.0.0", "muted"));
@@ -266,27 +115,11 @@ MainWindow::MainWindow(QString ffmpeg) {
     auto *body = new QHBoxLayout; body->setSpacing(16); layout->addLayout(body, 1);
     pages = new QStackedWidget; body->addWidget(pages, 1);
     consolePage = new ConsolePage(&match); pages->addWidget(consolePage);
-    auto *viewer = panel(); pages->addWidget(viewer);
-    auto *viewLayout = new QVBoxLayout(viewer); viewLayout->setContentsMargins(16, 14, 16, 16); viewLayout->setSpacing(10);
-    auto *viewHeader = new QHBoxLayout; viewLayout->addLayout(viewHeader);
-    viewHeader->addWidget(label("主视角", "section")); liveBadge = label("等待画面", "badge"); viewHeader->addWidget(liveBadge, 0, Qt::AlignVCenter); viewHeader->addStretch();
-    focusButton = new QPushButton("专注  F10"); focusButton->setCheckable(true);
-    focusButton->setToolTip("隐藏配置、接收统计和日志，保留图传、比赛概览与链路提醒"); viewHeader->addWidget(focusButton);
-    fullScreenButton = new QPushButton("全屏  F11"); fullScreenButton->setToolTip("F11 切换全屏，Esc 退出全屏"); viewHeader->addWidget(fullScreenButton);
-    canvas = new VideoCanvas;
-    matchSummary = new MatchSummary(canvas); viewLayout->addWidget(matchSummary);
-    viewLayout->addWidget(canvas, 1);
-    auto *videoTools = new QHBoxLayout; viewLayout->addLayout(videoTools);
-    overlay = new QCheckBox("画内叠加"); overlay->setToolTip("在图传内额外叠加比分；关闭后上方比赛概览仍可查看");
-    videoTools->addWidget(overlay);
-    // 来源与操作位铭牌放在画面之外，不再压住图传内容。
-    videoSourcePlate = label("本地模拟 / 非真实比赛画面", "badge"); videoTools->addWidget(videoSourcePlate);
-    videoOperatorPlate = label("未选择操作位", "badge"); videoTools->addWidget(videoOperatorPlate);
-    videoTools->addStretch();
-    videoInfo = label("HEVC 图传 · 等待输入", "muted"); videoTools->addWidget(videoInfo);
-    matchNotice = label("比赛信息：等待连接", "notice"); matchNotice->setWordWrap(true); viewLayout->addWidget(matchNotice);
+    operatorPage = new OperatorPage(&match); pages->addWidget(operatorPage);
+    // 接收统计仍由主窗口持有（内容与图传/接收计数耦合），但摆在单兵模式页面内部，
+    // 这样专注模式隐藏它时不会连带影响总控模式。
     diagnostics = new QWidget; auto *stats = new QHBoxLayout(diagnostics); stats->setContentsMargins(0, 0, 0, 0);
-    stats->setSpacing(16); viewLayout->addWidget(diagnostics);
+    stats->setSpacing(16);
     auto metric = [stats](const QString &caption, const QString &value) {
         auto *column = new QVBoxLayout; column->setSpacing(4); stats->addLayout(column, 1);
         column->addWidget(label(caption, "muted")); auto *number = label(value, "metric"); column->addWidget(number); return number;
@@ -294,9 +127,10 @@ MainWindow::MainWindow(QString ffmpeg) {
     messageCount = metric("已收比赛信息", "0"); dataAge = metric("距最近更新", "—");
     dataAge->setToolTip("自最近一次收到 GameStatus 起经过的时间，不代表网络延迟");
     frameRate = metric("解码帧率", "0 fps"); dropCount = metric("丢弃视频帧", "0");
+    operatorPage->setDiagnostics(diagnostics);
 
     sidebar = new QScrollArea; sidebar->setObjectName("sidebar"); sidebar->setFrameShape(QFrame::NoFrame);
-    // 固定 312 会把总控台顶出窄屏；改为可自适应，横向滚动条仍关闭。
+    // 固定 312 会把总控模式顶出窄屏；改为可自适应，横向滚动条仍关闭。
     sidebar->setWidgetResizable(true); sidebar->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     sidebar->setMinimumWidth(280); sidebar->setMaximumWidth(360);
     sidebar->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
@@ -418,7 +252,10 @@ MainWindow::MainWindow(QString ffmpeg) {
     connect(mode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int i) {
         host->setText(i ? "192.168.12.1" : "127.0.0.1"); bindIp->setText(i ? "192.168.12.2" : "127.0.0.1");
         // 来源标签跟随正在使用的连接，避免只改下拉框就把模拟帧标为实机。
-        if (!active && canvas->image.isNull() && !canvas->hasData) canvas->simulation = i == 0;
+        if (!active && !operatorPage->stage()->hasFrame() && !hasGameData()) {
+            simulation = i == 0;
+            operatorPage->setSimulation(simulation);
+        }
         mode->setToolTip(active ? "参数将在重新连接后生效" : "选择本地模拟或实机链路"); refresh();
     });
     connect(team, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::updateProfile);
@@ -428,31 +265,31 @@ MainWindow::MainWindow(QString ffmpeg) {
         active = false; receiver.stop(); video.stop(); mqttReady = false; lastData = lastFrame = -1; match.reset();
         stopButton->setEnabled(false); frameRate->setText("0 fps"); updateProfile(); refresh();
     });
-    connect(overlay, &QCheckBox::toggled, this, [this](bool value) { canvas->overlay = value; canvas->update(); });
+    connect(operatorPage->overlayToggle(), &QCheckBox::toggled, this, [this](bool) { updateHudVisibility(); refresh(); });
     connect(&receiver, &StatusReceiver::stateChanged, this, [this](const QString &text, bool ready) {
         connection->setText(text); mqttReady = ready; addEvent(text); refresh();
     });
     connect(&receiver, &StatusReceiver::received, this, [this](const rm::GameStatus &value) {
-        match.applyGame(value);
+        // 先与上一份快照比较再写入，否则变化检测会把新值和新值比。
         recordMatchChanges(value);
+        match.applyGame(value);
         for (const auto &issue : status::warnings(value)) addEvent("协议警告：" + issue);
-        canvas->data = value; canvas->hasData = true; lastData = clock.elapsed(); ++messages;
+        lastData = clock.elapsed(); ++messages;
         auto object = status::json(value); object["received_at"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
         const auto text = QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
         appendLog(log, text); QTextStream(stdout) << text << Qt::endl;
         lastUpdate->setText("最近接收 " + QDateTime::currentDateTime().toString("HH:mm:ss"));
-        canvas->setAccessibleDescription(QString("%1，红方 %2，蓝方 %3，剩余 %4")
+        // 单兵模式的无障碍描述也不能泄漏比分；比分只属于总控模式的 ScoreBar。
+        operatorPage->strip()->setAccessibleDescription(QString("%1，剩余 %2")
             .arg(value.has_current_stage() ? status::stage(value.current_stage()) : "阶段未提供")
-            .arg(value.has_red_score() ? QString::number(value.red_score()) : "未提供")
-            .arg(value.has_blue_score() ? QString::number(value.blue_score()) : "未提供")
             .arg(value.has_stage_countdown_sec() ? status::duration(value.stage_countdown_sec()) : "未提供"));
-        matchSummary->setAccessibleDescription(canvas->accessibleDescription());
         refresh();
     });
     connect(&video, &VideoReceiver::frameReady, this, [this](QImage frame) {
-        canvas->image = frame; lastFrame = clock.elapsed(); canvas->videoStale = false; canvas->update();
+        lastFrame = clock.elapsed();
+        operatorPage->stage()->setFrame(frame, false);
     });
-    // 总控台数据域：全部进入 MatchState；慢速/触发式域同时落 JSON 日志，10Hz 动态域只进模型。
+    // 数据域：全部进入 MatchState；慢速/触发式域同时落 JSON 日志，10Hz 动态域只进模型。
     const auto appendDomain = [this](QJsonObject object) {
         object["received_at"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
         appendLog(log, QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
@@ -487,15 +324,14 @@ MainWindow::MainWindow(QString ffmpeg) {
     });
     connect(&receiver, &StatusReceiver::receivedRadar, &match, &MatchState::applyRadar);
     connect(&video, &VideoReceiver::problem, this, &MainWindow::addEvent);
-    connect(focusButton, &QPushButton::toggled, this, &MainWindow::setFocusMode);
+    connect(operatorPage->focusButton(), &QPushButton::toggled, this, &MainWindow::setFocusMode);
     connect(new QShortcut(QKeySequence("F10"), this), &QShortcut::activated, this, [this] { setFocusMode(!focusMode); });
-    connect(fullScreenButton, &QPushButton::clicked, this, &MainWindow::toggleFullScreen);
+    connect(operatorPage->fullScreenButton(), &QPushButton::clicked, this, &MainWindow::toggleFullScreen);
     connect(new QShortcut(QKeySequence("F11"), this), &QShortcut::activated, this, &MainWindow::toggleFullScreen);
     connect(viewButton, &QPushButton::clicked, this, &MainWindow::switchView);
     connect(new QShortcut(QKeySequence("Ctrl+Tab"), this), &QShortcut::activated, this, &MainWindow::switchView);
-    connect(new QShortcut(QKeySequence("Esc"), this), &QShortcut::activated, this, [this] {
-        if (isFullScreen()) toggleFullScreen(); else if (focusMode) setFocusMode(false);
-    });
+    connect(new QShortcut(QKeySequence("Esc"), this), &QShortcut::activated, this, &MainWindow::leaveFullscreenOrFocus);
+    connect(new QShortcut(QKeySequence("M"), this), &QShortcut::activated, this, &MainWindow::toggleMap);
     updateProfile();
     clock.start(); ticker.setInterval(200); connect(&ticker, &QTimer::timeout, this, &MainWindow::refresh); ticker.start(); refresh();
 }
@@ -509,44 +345,90 @@ bool MainWindow::selectRobot(int id) {
     return true;
 }
 
+bool MainWindow::hasGameData() const { return match.ageMs(MatchState::Domain::Game) >= 0; }
+bool MainWindow::dataStale() const {
+    const qint64 age = match.ageMs(MatchState::Domain::Game);
+    return !mqttReady || age < 0 || age > kStaleMs;
+}
+bool MainWindow::videoStale() const { return lastFrame < 0 || clock.elapsed() - lastFrame > kStaleMs; }
+
 void MainWindow::updateProfile() {
     const int id = profile::robotId(team->currentIndex() == 1, robotRole->currentData().toInt());
     robotId->setText(QString::number(id));
     const bool pending = active && id != connectedRobotId;
     profileHint->setText(QString("机器人 ID %1 · %2").arg(id).arg(pending ? "点击下方按钮应用切换" : "需与官方选手端登录编号一致"));
     connectButton->setText(pending ? "应用兵种并重连" : active ? "重新连接当前机器人" : "连接所选机器人");
-    const bool previous = !active && (canvas->hasData || !canvas->image.isNull());
+    const bool previous = !active && (hasGameData() || operatorPage->stage()->hasFrame());
     const int displayedId = active || previous ? connectedRobotId : id;
-    canvas->allyBlue = displayedId > 100;
     operatorIdentity->setText(QString("%1 / ID %2 · %3").arg(profile::name(displayedId)).arg(displayedId)
         .arg(active ? "当前连接" : previous ? "已断开，保留上次画面" : "待连接"));
     // 编辑下一次连接的操作位时，不改写旧画面的来源身份。
-    canvas->operatorName = profile::name(displayedId) + QString(" / ID %1").arg(displayedId);
-    canvas->update();
+    operatorPage->setRobot(displayedId);
+    operatorPage->refresh();
 }
 
 void MainWindow::setFocusMode(bool enabled) {
     focusMode = enabled;
-    const QSignalBlocker block(focusButton);
-    focusButton->setChecked(enabled); focusButton->setText(enabled ? "退出专注  F10" : "专注  F10");
+    // 专注态本身包含全屏，进入专注即退出纯全屏，两者互斥。
+    if (enabled) pureFullScreen = false;
+    const QSignalBlocker block(operatorPage->focusButton());
+    operatorPage->focusButton()->setChecked(enabled);
+    operatorPage->focusButton()->setText(enabled ? "退出专注  F10" : "专注  F10");
     sidebar->setVisible(!enabled); logPanel->setVisible(!enabled);
     diagnostics->setVisible(!enabled && !logToggle->isChecked());
-    if (enabled) focusButton->setFocus();
+    operatorPage->setFocused(enabled);
+    if (enabled) { showFullScreen(); operatorPage->focusButton()->setFocus(); }
+    else showNormal();
+    // 专注模式保留全部信息叠加，只把卡底调淡；HUD 显隐仍由「信息叠加」与纯全屏共同决定。
+    updateHudVisibility();
+    refresh();
+}
+
+void MainWindow::toggleFullScreen() {
+    // F11 切"纯全屏（无 HUD）"：与专注态互斥，从专注态按 F11 会转为纯全屏。
+    if (focusMode) setFocusMode(false);
+    if (isFullScreen()) { showNormal(); pureFullScreen = false; }
+    else { showFullScreen(); pureFullScreen = true; }
+    operatorPage->fullScreenButton()->setText(isFullScreen() ? "退出全屏  Esc" : "全屏  F11");
+    updateHudVisibility();
+    refresh();
+}
+
+void MainWindow::leaveFullscreenOrFocus() {
+    // 专注态含全屏，必须先判专注：否则会出现"退了全屏但仍在专注态"的中间错误状态。
+    if (focusMode) setFocusMode(false);
+    else if (isFullScreen()) toggleFullScreen();
+}
+
+void MainWindow::toggleMap() {
+    // 底部日志是 QPlainTextEdit，焦点在其中时按 M 会被当作文本输入。
+    // QShortcut 默认 WindowShortcut 上下文仍会抢键，必须显式判断焦点控件。
+    QWidget *focused = QApplication::focusWidget();
+    if (qobject_cast<QPlainTextEdit *>(focused) || qobject_cast<QLineEdit *>(focused)
+        || qobject_cast<QAbstractSpinBox *>(focused) || qobject_cast<QComboBox *>(focused)) return;
+    if (pages->currentWidget() == operatorPage) operatorPage->toggleMap();
+    else consolePage->toggleMap();
+    refresh();
+}
+
+void MainWindow::updateHudVisibility() {
+    operatorPage->setHudVisible(operatorPage->overlayToggle()->isChecked() && !pureFullScreen);
 }
 
 void MainWindow::recordMatchChanges(const rm::GameStatus &value) {
-    const bool continuous = canvas->hasData && mqttReady && lastData >= 0 && clock.elapsed()-lastData <= 1500;
+    const bool hadData = hasGameData();
+    const bool continuous = hadData && mqttReady && lastData >= 0 && clock.elapsed()-lastData <= kStaleMs;
     if (!continuous) {
-        addEvent(QString("%1：%2").arg(canvas->hasData ? "比赛快照恢复" : "首次收到比赛信息")
+        addEvent(QString("%1：%2").arg(hadData ? "比赛快照恢复" : "首次收到比赛信息")
             .arg(value.has_current_stage() ? status::stage(value.current_stage()) : "阶段未提供"));
         return;
     }
-    for (const auto &text : status::changes(canvas->data, value)) addEvent(text);
+    for (const auto &text : status::changes(match.game, value)) addEvent(text);
 }
 
 void MainWindow::refreshStatusDetails() {
     if (statusValues.size() != 10) return;
-    const auto &v = canvas->data;
+    const auto &v = match.game;
     const auto number = [](bool present, quint32 value) { return present ? QString::number(value) : QString("未提供"); };
     const auto seconds = [](bool present, qint32 value) { return present ? status::duration(value) : QString("未提供"); };
     statusValues[0]->setText(number(v.has_current_round(), v.current_round()));
@@ -573,10 +455,12 @@ void MainWindow::refreshStatusDetails() {
     present += v.has_stage_elapsed_sec() ? 1 : 0; present += v.has_is_paused() ? 1 : 0;
     present += v.has_game_result() ? 1 : 0; present += v.has_end_reason() ? 1 : 0;
     const auto issues = status::warnings(v);
-    const QString state = !canvas->hasData ? "未接收" : canvas->stale ? "已过期" : issues.isEmpty() ? "实时" : "协议警告";
-    badge(statusBadge, state, !canvas->hasData ? "neutral" : canvas->stale || !issues.isEmpty() ? "warning" : "good");
+    const bool hadData = hasGameData();
+    const bool stale = dataStale();
+    const QString state = !hadData ? "未接收" : stale ? "已过期" : issues.isEmpty() ? "实时" : "协议警告";
+    badge(statusBadge, state, !hadData ? "neutral" : stale || !issues.isEmpty() ? "warning" : "good");
     statusMeta->setText(QString("协议 RM2026-V2.0.0 · 已提供 %1 / 10 字段%2")
-        .arg(present).arg(canvas->stale && canvas->hasData ? " · 快照已过期" : ""));
+        .arg(present).arg(stale && hadData ? " · 快照已过期" : ""));
     if (issues.isEmpty()) statusWarning->hide();
     else { statusWarning->setText("协议警告：" + issues.join("；")); statusWarning->show(); }
     statusPanel->setAccessibleDescription(statusMeta->text() + (issues.isEmpty() ? "" : "；" + statusWarning->text()));
@@ -585,8 +469,9 @@ void MainWindow::refreshStatusDetails() {
 void MainWindow::switchView() {
     const bool toConsole = pages->currentWidget() != consolePage;
     pages->setCurrentIndex(toConsole ? 0 : 1);
-    // 按钮文案始终显示切换目标：当前是总控台时提示可切到单兵视角。
-    viewButton->setText(toConsole ? "单兵视角  Ctrl+Tab" : "总控台  Ctrl+Tab");
+    // 按钮文案始终显示切换目标：当前是总控模式时提示可切到单兵模式。
+    viewButton->setText(toConsole ? "单兵模式  Ctrl+Tab" : "总控模式  Ctrl+Tab");
+    refresh();
 }
 
 bool MainWindow::validateForm() {
@@ -615,16 +500,17 @@ void MainWindow::startConnection() {
     receiver.stop(); video.stop(); messages = 0; lastData = lastFrame = -1; mqttReady = false;
     match.reset();
     fpsSampleAt = clock.elapsed(); fpsSampleFrames = 0; frameRate->setText("0 fps");
-    canvas->data.Clear(); canvas->hasData = false; canvas->image = {}; canvas->setAccessibleDescription("等待比赛信息");
-    matchSummary->setAccessibleDescription("等待比赛信息");
-    canvas->simulation = mode->currentIndex() == 0; active = true; connectedRobotId = robotId->text().toInt();
+    operatorPage->stage()->setFrame(QImage(), true);
+    operatorPage->strip()->setAccessibleDescription("等待比赛信息");
+    simulation = mode->currentIndex() == 0; active = true; connectedRobotId = robotId->text().toInt();
+    operatorPage->setSimulation(simulation);
     consolePage->setRobot(connectedRobotId);
-    updateProfile(); addEvent("连接操作位：" + canvas->operatorName);
+    updateProfile(); addEvent("连接操作位：" + operatorPage->operatorName());
     stopButton->setEnabled(true); lastUpdate->setText("最近接收 —");
     const bool mqttStarted = receiver.start(host->text().trimmed(), mqttPort->value(), robotId->text().trimmed());
     const bool videoStarted = video.start(bindIp->text().trimmed(), quint16(udpPort->value()), ffmpegPath->text().trimmed());
     if (!mqttStarted || !videoStarted) {
-        // 任一链路无法创建时立即回滚，避免界面显示“已连接”但后台仍残留半条链路。
+        // 任一链路无法创建时立即回滚，避免界面显示"已连接"但后台仍残留半条链路。
         receiver.stop(); video.stop(); active = false; mqttReady = false;
         stopButton->setEnabled(false); addEvent("连接未启动：请修正 MQTT 或图传参数");
     }
@@ -640,60 +526,51 @@ void MainWindow::addEvent(const QString &text) {
     if (text == lastEvent) return;
     lastEvent = text; appendLog(eventLog, QDateTime::currentDateTime().toString("HH:mm:ss") + "  " + text);
 }
-void MainWindow::toggleFullScreen() {
-    if (isFullScreen()) showNormal(); else showFullScreen();
-    fullScreenButton->setText(isFullScreen() ? "退出全屏  Esc" : "全屏  F11");
-}
+
 void MainWindow::refresh() {
     if (!clock.isValid()) return;
     const auto now = clock.elapsed();
-    canvas->stale = !mqttReady || lastData < 0 || now-lastData > 1500;
-    canvas->videoStale = lastFrame < 0 || now-lastFrame > 1500;
-    badge(sourceBadge, canvas->simulation ? "本地模拟" : "实机链路", canvas->simulation ? "warning" : "neutral");
-    badge(videoSourcePlate, canvas->simulation ? "本地模拟 / 非真实比赛画面" : "实机图传 / RM2026",
-          canvas->simulation ? "warning" : "good");
-    badge(videoOperatorPlate, canvas->operatorName.isEmpty() ? "未选择操作位" : canvas->operatorName, "neutral");
-    badge(dataState, !active ? "未连接" : canvas->stale ? (lastData < 0 ? "等待数据" : "数据过期") : "实时更新",
-          !active ? "neutral" : canvas->stale ? "warning" : "good");
-    const QString videoText = !active ? "未连接" : canvas->videoStale ? (lastFrame < 0 ? "等待画面" : "图传中断") : "正在播放";
-    const char *videoTone = !active ? "neutral" : canvas->videoStale ? "warning" : "good";
-    badge(videoState, videoText, videoTone); badge(liveBadge, videoText, videoTone);
-    QString notice;
-    const char *noticeTone = "neutral";
-    if (!active) notice = canvas->hasData ? "已断开连接 · 比赛概览保留上次快照" : "选择操作位并连接，开始接收比赛信息与图传";
-    else if (canvas->stale) {
-        notice = lastData < 0 ? "等待比赛信息 · 请检查服务端和机器人编号" : "比赛信息已过期 · 倒计时保留最后接收值";
-        noticeTone = "warning";
-    } else if (canvas->videoStale) {
-        notice = lastFrame < 0 ? "比赛信息正常 · 等待图传输入" : "图传已中断 · 当前画面为最后一帧";
-        noticeTone = "warning";
-    } else if (canvas->data.has_is_paused() && canvas->data.is_paused()) {
-        notice = "比赛已暂停 · 倒计时以裁判系统最新数据为准"; noticeTone = "warning";
-    } else notice = "比赛信息实时更新 · 图传接收正常";
-    badge(matchNotice, notice, noticeTone);
-    matchNotice->setAccessibleDescription(notice);
+    const bool stale = dataStale();
+    const bool imageStale = videoStale();
+    badge(sourceBadge, simulation ? "本地模拟" : "实机链路", simulation ? "warning" : "neutral");
+    badge(dataState, !active ? "未连接" : stale ? (lastData < 0 ? "等待数据" : "数据过期") : "实时更新",
+          !active ? "neutral" : stale ? "warning" : "good");
+    const QString videoText = !active ? "未连接" : imageStale ? (lastFrame < 0 ? "等待画面" : "图传中断") : "正在播放";
+    badge(videoState, videoText, !active ? "neutral" : imageStale ? "warning" : "good");
     messageCount->setText(QString::number(messages)); dropCount->setText(QString::number(video.dropped()));
     dataAge->setText(lastData < 0 ? "—" : now-lastData < 1000 ? QString("%1 ms").arg(now-lastData) : QString("%1 s").arg((now-lastData)/1000.0, 0, 'f', 1));
     if (now-fpsSampleAt >= 1000) {
         frameRate->setText(QString("%1 fps").arg((video.decoded-fpsSampleFrames)*1000.0/(now-fpsSampleAt), 0, 'f', 0));
         fpsSampleFrames = video.decoded; fpsSampleAt = now;
     }
-    videoInfo->setText(canvas->image.isNull() ? "HEVC 图传 · 等待输入" : QString("%1 × %2 · HEVC").arg(canvas->image.width()).arg(canvas->image.height()));
     const QString base = video.sliceBase() < 0 ? "未判定" : QString::number(video.sliceBase());
     packetInfo->setText(QString("UDP %1 包 · 无效包 %2 · 分片基数 %3").arg(video.packets).arg(video.invalid()).arg(base));
-    logToggle->setText(QString("接收日志 · %1 条比赛信息").arg(messages)); canvas->update(); matchSummary->update();
-    consolePage->videoPreview()->setFrame(canvas->image, canvas->videoStale);
+    logToggle->setText(QString("接收日志 · %1 条比赛信息").arg(messages));
+    // 图传的"过期"随计时变化，需要在每个 tick 同步刷新阶段层，否则断流后提示不会出现。
+    operatorPage->stage()->setStale(imageStale);
+    operatorPage->setLink({active, mqttReady, stale, imageStale, hasGameData()});
+    consolePage->videoPreview()->setFrame(operatorPage->stage()->frame(), imageStale);
     refreshStatusDetails();
 }
+
 QJsonObject MainWindow::metrics() const {
     return {{"messages", double(messages)}, {"decoded_frames", double(video.decoded)}, {"udp_packets", double(video.packets)},
         {"robot_id", connectedRobotId}, {"selected_robot_id", robotId->text().toInt()}, {"operator", profile::name(connectedRobotId)},
-        {"data_stale", canvas->stale}, {"video_stale", canvas->videoStale},
+        {"data_stale", dataStale()}, {"video_stale", videoStale()},
         {"mqtt_received", double(receiver.receivedMessages)}, {"mqtt_malformed", double(receiver.malformedMessages)},
         {"last_payload_bytes", receiver.lastPayloadBytes}, {"last_qos", receiver.lastQos},
         {"video_slice_base", video.sliceBase()}, {"video_zero_based_frames", double(video.zeroBasedFrames())},
         {"video_one_based_frames", double(video.oneBasedFrames())}, {"console_page", double(pages->currentIndex())},
-        // 总控台证据：面板内容、数据域时效与累计接收计数，供 check_console.py 校验。
+        // 单兵模式证据：信息叠加的整体显隐、开关状态、队友面板行数、地图点位与专注全屏状态。
+        // 可见性三项取"当前时刻"的实际状态（自检结束后会回到总控模式，故为 false），
+        // 外部脚本据此只能验证开关口径，结构性问题由 --ui-checks 的返回值为准。
+        {"operator_hud_enabled", operatorPage->overlayToggle()->isChecked()},
+        {"operator_hud_visible", operatorPage->hudVisible()},
+        {"operator_teammate_rows", operatorPage->teammates()->rowCount()},
+        {"operator_map_markers", operatorPage->map()->markerCount()},
+        {"operator_map_visible", operatorPage->mapVisible()},
+        {"operator_focus_fullscreen", focusMode && isFullScreen()},
+        // 总控模式证据：面板内容、数据域时效与累计接收计数，供 check_console.py 校验。
         {"console_timeline", double(match.timeline().size())}, {"console_markers", double(consolePage->map()->markerCount())},
         {"console_video_preview", consolePage->videoPreview()->hasFrame()},
         {"console_analysis", consolePage->analysis()->statusText()},
@@ -702,38 +579,50 @@ QJsonObject MainWindow::metrics() const {
         {"console_event_messages", double(match.eventMessages)}, {"console_penalty_messages", double(match.penaltyMessages)},
         {"console_position_age_ms", double(match.ageMs(MatchState::Domain::Position))},
         {"console_radar_age_ms", double(match.ageMs(MatchState::Domain::Radar))},
-        {"status", status::json(canvas->data)}};
+        {"status", status::json(match.game)}};
 }
 bool MainWindow::saveEvidence(const QString &path) { return grab().save(path); }
 bool MainWindow::runUiChecks(const QString &evidencePrefix) {
     const auto originalSize = size();
-    const bool originalOverlay = overlay->isChecked();
     const int originalSelection = robotId->text().toInt();
     const int originalConnection = connectedRobotId;
-    const QString originalIdentity = canvas->operatorName;
+    const QString originalIdentity = operatorPage->operatorName();
+    auto settle = [] { QApplication::processEvents(QEventLoop::ExcludeUserInputEvents); };
     auto checkpoint = [](bool passed, const char *name) {
         if (!passed) QTextStream(stderr) << "UI 检查失败：" << name << Qt::endl;
     };
-    overlay->setChecked(false); bool okay = !canvas->overlay;
-    overlay->setChecked(true); okay = okay && canvas->overlay;
-    overlay->setChecked(originalOverlay);
+    // M 键必须真的绑在快捷键上，否则"能切地图"只是调用了一个没人触发的函数。
+    bool mapShortcutBound = false;
+    for (auto *shortcut : findChildren<QShortcut *>())
+        if (shortcut->key() == QKeySequence("M")) mapShortcutBound = true;
+    bool okay = mapShortcutBound;
+    checkpoint(okay, "M 键已绑定");
+
+    // 兵种选择与待应用身份
     for (const bool blue : {false, true}) for (const auto &role : profile::roles) {
         const int id = profile::robotId(blue, role.number);
         okay = selectRobot(id) && robotId->text().toInt() == id && okay;
-        if (active) okay = connectedRobotId == originalConnection && canvas->operatorName == originalIdentity && okay;
+        if (active) okay = connectedRobotId == originalConnection && operatorPage->operatorName() == originalIdentity && okay;
     }
     okay = !selectRobot(100) && !selectRobot(10) && okay;
     selectRobot(originalSelection);
     checkpoint(okay, "兵种选择与待应用身份");
+
+    // GameStatus 十字段面板
     refreshStatusDetails();
     okay = statusPanel->isVisible() && statusValues.size() == 10 && okay;
-    if (canvas->hasData) {
+    if (hasGameData()) {
         okay = statusValues[4]->text().contains("比赛") && statusMeta->text().contains("/ 10") && okay;
     }
     checkpoint(okay, "GameStatus 十字段面板");
+
+    // 总控模式页面
     const int originalPage = pages->currentIndex();
     pages->setCurrentWidget(consolePage);
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    settle();
+    const bool consoleMapWasOn = consolePage->mapVisible();
+    // 自检不应受上一次用户偏好影响；结束时恢复原始状态，避免测试改变实际 UI 偏好。
+    consolePage->setMapVisible(true); settle();
     okay = pages->currentWidget() == consolePage && consolePage->scoreBar()->isVisible()
         && consolePage->allyList()->isVisible() && consolePage->enemyList()->isVisible()
         && consolePage->map()->isVisible() && consolePage->respawnState()->isVisible()
@@ -749,46 +638,160 @@ bool MainWindow::runUiChecks(const QString &evidencePrefix) {
         okay = consolePage->analysis()->statusText() != "等待数据" && okay;
     if (match.ageMs(MatchState::Domain::Respawn) >= 0)
         okay = consolePage->respawnState()->statusText() != "未收到复活数据" && okay;
-    if (!canvas->image.isNull()) okay = consolePage->videoPreview()->hasFrame() && okay;
+    if (operatorPage->stage()->hasFrame()) okay = consolePage->videoPreview()->hasFrame() && okay;
+    // 总控模式中央地图同样由 M 键开关，此时必须切的是总控模式自己的地图。
+    consolePage->setMapVisible(false); settle();
+    okay = !consolePage->map()->isVisible() && okay;
+    consolePage->setMapVisible(true); settle();
+    okay = consolePage->map()->isVisible() && okay;
     if (!evidencePrefix.isEmpty()) {
         okay = saveEvidence(evidencePrefix + "-console.png") && okay;
         okay = consolePage->map()->grab().save(evidencePrefix + "-console-minimap.png") && okay;
-        resize(1024, 720); QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        resize(1024, 720); settle();
         okay = consolePage->scoreBar()->isVisible() && consolePage->map()->isVisible()
             && consolePage->map()->width() > 100 && consolePage->allyList()->width() > 100 && okay;
         okay = saveEvidence(evidencePrefix + "-console-compact.png") && okay;
-        resize(originalSize); QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        resize(originalSize); settle();
     }
-    checkpoint(okay, "总控台页面");
-    pages->setCurrentIndex(1);
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    const int normalWidth = canvas->width();
-    setFocusMode(true); QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    okay = sidebar->isHidden() && logPanel->isHidden() && diagnostics->isHidden()
-        && matchSummary->isVisible() && matchNotice->isVisible() && canvas->width() > normalWidth && okay;
-    if (!evidencePrefix.isEmpty()) okay = saveEvidence(evidencePrefix + "-focus.png") && okay;
-    setFocusMode(false); QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    okay = !sidebar->isHidden() && !logPanel->isHidden() && okay;
-    checkpoint(okay, "专注模式");
+    checkpoint(okay, "总控模式页面");
+
+    // 单兵模式页面：顶部信息条 / 队友面板 / 地图 / 信息叠加 / 专注即全屏
+    pages->setCurrentWidget(operatorPage);
+    settle();
+    const bool hudWasOn = operatorPage->overlayToggle()->isChecked();
+    // 复选框必须真的控制整个 HUD：关掉只剩纯图传。
+    operatorPage->overlayToggle()->setChecked(false); settle();
+    const bool overlayOff = !operatorPage->hudVisible() && !operatorPage->strip()->isVisible();
+    operatorPage->overlayToggle()->setChecked(true); settle();
+    const bool overlayOn = operatorPage->hudVisible() && operatorPage->strip()->isVisible();
+    // 顶部条只呈现身份、阶段、倒计时与局数，任何口径下都不含比分。
+    const QString stripText = operatorPage->strip()->summaryText();
+    const bool stripOk = operatorPage->strip()->isVisible() && stripText.contains("阶段")
+        && !stripText.contains("比分") && !stripText.contains("得分");
+    // 队友面板固定 5 个协议槽位（1/2/3/4/7）。
+    const bool matesOk = operatorPage->teammates()->isVisible() && operatorPage->teammates()->rowCount() == 5;
+    // 地图：HUD 内常驻可见，M 键隐藏后能恢复。
+    const bool mapWasOn = operatorPage->mapVisible();
+    operatorPage->setMapVisible(true); settle();
+    const bool mapOnOk = operatorPage->map()->isVisible();
+    operatorPage->toggleMap(); settle();
+    const bool mapOffOk = !operatorPage->map()->isVisible();
+    operatorPage->toggleMap(); settle();
+    const bool mapBackOk = operatorPage->map()->isVisible() && operatorPage->mapVisible();
+    // 图传必须是精确 16:9：既不出黑边，HUD 也不会锚到画面之外。
+    const int stageWidth = operatorPage->stage()->width(), stageHeight = operatorPage->stage()->height();
+    const bool ratioOk = stageWidth > 0 && stageHeight > 0
+        && qAbs(double(stageWidth) / stageHeight - 16.0 / 9.0) < 0.02
+        && operatorPage->stage()->imageRect() == operatorPage->stage()->rect();
+    // HUD 的每一块都必须落在画面矩形内，否则会压到画面之外。
+    const QRect frame = operatorPage->stage()->imageRect();
+    const bool anchoredOk = frame.contains(operatorPage->strip()->geometry())
+        && frame.contains(operatorPage->teammates()->geometry())
+        && frame.contains(operatorPage->hud()->ownCard()->geometry())
+        && frame.contains(operatorPage->map()->geometry());
+    bool group = overlayOff && overlayOn && stripOk && matesOk && mapOnOk && mapOffOk && mapBackOk
+        && ratioOk && anchoredOk;
+    if (!group) QTextStream(stderr) << "单兵模式断言：叠加关=" << overlayOff << " 叠加开=" << overlayOn
+        << " 顶部条=" << stripOk << " 队友=" << matesOk << " 地图开=" << mapOnOk << " 地图关=" << mapOffOk
+        << " 地图恢复=" << mapBackOk << " 16:9=" << ratioOk << "(" << stageWidth << "x" << stageHeight
+        << ") 锚定=" << anchoredOk << Qt::endl;
+    okay = group && okay;
+    if (!evidencePrefix.isEmpty()) okay = saveEvidence(evidencePrefix + "-operator.png") && okay;
+    checkpoint(okay, "单兵模式页面");
+
+    // 专注模式 = 全屏 + 隐藏侧栏/日志/诊断 + HUD 全部保留
+    const int normalStageWidth = stageWidth;
+    setFocusMode(true); settle();
+    // 图传变大后 HUD 必须整体重排：四个信息件都要仍旧落在画面矩形内，不能只判"可见"。
+    const QRect focusFrame = operatorPage->stage()->imageRect();
+    const bool focusAnchored = focusFrame.contains(operatorPage->strip()->geometry())
+        && focusFrame.contains(operatorPage->teammates()->geometry())
+        && focusFrame.contains(operatorPage->hud()->ownCard()->geometry())
+        && focusFrame.contains(operatorPage->map()->geometry());
+    if (!focusAnchored) QTextStream(stderr) << "专注态锚定：画面=" << focusFrame.width() << "x" << focusFrame.height()
+        << " 顶部条=" << operatorPage->strip()->geometry().bottom()
+        << " 队友卡=" << operatorPage->teammates()->geometry().bottom()
+        << " 本机卡=" << operatorPage->hud()->ownCard()->geometry().bottom()
+        << " 地图=" << operatorPage->map()->geometry().bottom() << Qt::endl;
+    okay = sidebar->isHidden() && logPanel->isHidden() && diagnostics->isHidden() && isFullScreen()
+        && operatorPage->hudVisible() && operatorPage->strip()->isVisible() && operatorPage->map()->isVisible()
+        && operatorPage->stage()->width() > normalStageWidth && focusAnchored && okay;
+    // 另存一张只有 HUD 的原尺寸证据：整窗截图缩放后看不出 HUD 内部是否被裁。
+    if (!evidencePrefix.isEmpty()) {
+        okay = operatorPage->hud()->grab().save(evidencePrefix + "-hud.png") && okay;
+        okay = saveEvidence(evidencePrefix + "-focus.png") && okay;
+    }
+    // Esc 一次退到底：专注态本身含全屏，退专注后应直接回到窗口态。
+    leaveFullscreenOrFocus(); settle();
+    okay = !isFullScreen() && !focusMode && !sidebar->isHidden() && !logPanel->isHidden()
+        && operatorPage->hudVisible() && okay;
+    checkpoint(okay, "专注模式与 Esc");
+    // 纯全屏与专注态互斥，且纯全屏下不显示 HUD。
+    toggleFullScreen(); settle();
+    okay = isFullScreen() && !focusMode && !operatorPage->hudVisible() && okay;
+    leaveFullscreenOrFocus(); settle();
+    okay = !isFullScreen() && operatorPage->hudVisible() && okay;
+    operatorPage->overlayToggle()->setChecked(hudWasOn); settle();
+    operatorPage->setMapVisible(mapWasOn); settle();
+    consolePage->setMapVisible(consoleMapWasOn); settle();
+    checkpoint(okay, "纯全屏与 HUD 显隐");
+
+    // 日志与表单
     advancedToggle->setChecked(true); okay = okay && !advanced->isHidden();
     logToggle->setChecked(true); okay = okay && !logBody->isHidden();
     pauseLog->setChecked(true); okay = okay && pauseLog->isChecked(); pauseLog->setChecked(false);
     const QString validHost = host->text(); host->clear(); okay = !validateForm() && !formError->isHidden() && okay;
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    settle();
     if (!evidencePrefix.isEmpty()) okay = saveEvidence(evidencePrefix + "-validation.png") && okay;
     host->setText(validHost); okay = validateForm() && okay;
     checkpoint(okay, "日志与表单");
-    resize(1024, 720); QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    okay = canvas->width() >= 440 && sidebar->geometry().right() < centralWidget()->width()
-        && canvas->geometry().bottom() < overlay->mapTo(canvas->parentWidget(), QPoint()).y() && okay;
+
+    // 紧凑与最小窗口布局：图传不能被下方工具行压住，侧栏不能顶出窗口。
+    // 先在推荐运行态（日志折叠）下量图传尺寸，再在最坏态（日志展开）下量不重叠性。
+    logToggle->setChecked(false); settle();
+    resize(1024, 720); settle();
+    // 统一换算到页面坐标比较：图传与工具行各在stageRow / 页面下，彼此不是祖先关系。
+    const auto stageBottom = [this] {
+        return operatorPage->stage()->mapTo(operatorPage, QPoint(0, operatorPage->stage()->height() - 1)).y();
+    };
+    const auto toolTop = [this] { return operatorPage->overlayToggle()->mapTo(operatorPage, QPoint()).y(); };
+    const bool compactStage = operatorPage->stage()->width() >= 480;
+    const bool compactSidebar = sidebar->geometry().right() < centralWidget()->width();
+    const bool compactStack = stageBottom() < toolTop();
+    const bool compact = compactStage && compactSidebar && compactStack;
+    if (!compact) QTextStream(stderr) << "紧凑断言：图传宽=" << operatorPage->stage()->width()
+        << "(" << compactStage << ") 侧栏右=" << sidebar->geometry().right()
+        << " 窗口宽=" << centralWidget()->width() << "(" << compactSidebar << ") 图传底=" << stageBottom()
+        << " 工具行顶=" << toolTop() << "(" << compactStack << ")"
+        << " 图传几何=" << QString("(%1,%2 %3x%4)").arg(operatorPage->stage()->x()).arg(operatorPage->stage()->y())
+            .arg(operatorPage->stage()->width()).arg(operatorPage->stage()->height())
+        << " 提示几何=" << QString("(%1,%2 %3x%4)").arg(operatorPage->notice()->x()).arg(operatorPage->notice()->y())
+            .arg(operatorPage->notice()->width()).arg(operatorPage->notice()->height())
+        << " 工具控件=" << QString("(%1,%2 %3x%4)").arg(operatorPage->overlayToggle()->x()).arg(operatorPage->overlayToggle()->y())
+            .arg(operatorPage->overlayToggle()->width()).arg(operatorPage->overlayToggle()->height()) << Qt::endl;
+    okay = compact && okay;
     if (!evidencePrefix.isEmpty()) okay = saveEvidence(evidencePrefix + "-compact.png") && okay;
     checkpoint(okay, "紧凑窗口布局");
-    resize(minimumSize()); QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    okay = canvas->geometry().bottom() < overlay->mapTo(canvas->parentWidget(), QPoint()).y() && okay;
+    resize(minimumSize()); settle();
+    const bool minimumStack = stageBottom() < toolTop();
+    const bool minimumStrip = operatorPage->strip()->isVisible();
+    if (!(minimumStack && minimumStrip)) QTextStream(stderr) << "最小窗口断言：图传底=" << stageBottom()
+        << " 工具行顶=" << toolTop() << "(" << minimumStack << ") 顶部条可见=" << minimumStrip << Qt::endl;
+    okay = minimumStack && minimumStrip && okay;
     if (!evidencePrefix.isEmpty()) okay = saveEvidence(evidencePrefix + "-minimum.png") && okay;
-    checkpoint(okay, "最小窗口布局");
+    // 最坏态：日志展开会吃掉大量高度，图传被压到最小，此时布局仍不许重叠、HUD 仍须留在画面内。
+    logToggle->setChecked(true); settle();
+    const QRect squeezed = operatorPage->stage()->imageRect();
+    const bool squeezedOk = stageBottom() < toolTop() && !squeezed.isEmpty()
+        && squeezed.contains(operatorPage->strip()->geometry());
+    if (!squeezedOk) QTextStream(stderr) << "日志展开断言：图传底=" << stageBottom()
+        << " 工具行顶=" << toolTop() << " 图传=" << squeezed.width() << "x" << squeezed.height() << Qt::endl;
+    okay = squeezedOk && okay;
+    logToggle->setChecked(false); settle();
+    checkpoint(okay, "最小窗口与日志展开布局");
+
     advancedToggle->setChecked(false); logToggle->setChecked(false);
-    toggleFullScreen(); okay = isFullScreen() && okay; toggleFullScreen(); okay = !isFullScreen() && okay;
     pages->setCurrentIndex(originalPage);
-    resize(originalSize); return okay;
+    resize(originalSize); settle();
+    return okay;
 }

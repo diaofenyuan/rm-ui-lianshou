@@ -1,4 +1,4 @@
-"""用真实套接字验证总控台：面板内容、数据域时效与证据截图。"""
+"""用真实套接字验证总控模式与单兵模式：面板内容、信息叠加、数据域时效与证据截图。"""
 import json
 import os
 import socket
@@ -47,6 +47,10 @@ def check():
         assert code == 0, metrics
         assert metrics["ui_checks_passed"], metrics
         assert metrics["robot_id"] == metrics["selected_robot_id"] == 104, metrics
+        # 单兵模式：信息叠加默认开启、队友面板固定 5 个协议槽位（1/2/3/4/7）。
+        assert metrics["operator_hud_enabled"] and metrics["operator_teammate_rows"] == 5, metrics
+        # 单兵模式右上地图与总控模式中央地图是同一控件、同一 MatchState，点位必须一致。
+        assert metrics["operator_map_markers"] == metrics["console_markers"], metrics
         # 战术地图：雷达点位已绘制，位置与雷达都是新收到的数据。
         assert metrics["console_markers"] > 0, metrics
         assert metrics["console_radar_messages"] > 0 and metrics["console_position_messages"] > 0, metrics

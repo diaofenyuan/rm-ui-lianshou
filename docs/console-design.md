@@ -1,10 +1,12 @@
-# 总控台信息架构与坐标口径
+# 总控模式信息架构与坐标口径
 
-本文记录总控台页（`src/ui/console_page.*`）的面板构成、每个面板的数据来源与降级策略，以及地图坐标系的口径。协议事实一律以 `docs/references/RM2026-protocol-v2.0.0.pdf` 为准；未在协议中写明的部分单独列出，不混入结论。
+本文记录总控模式页（`src/ui/console_page.*`）的面板构成、每个面板的数据来源与降级策略，以及地图坐标系的口径。协议事实一律以 `docs/references/RM2026-protocol-v2.0.0.pdf` 为准；未在协议中写明的部分单独列出，不混入结论。
+
+单兵模式页的面板构成、快捷键与两个模式共用的数据边界见[单兵模式与总控模式说明](operator-mode.md)。
 
 ## 范围
 
-- 总控台只做**信息展示与提醒**，不向机器人或服务器发送任何命令（下行命令不在当前范围）。
+- 总控模式只做**信息展示与提醒**，不向机器人或服务器发送任何命令（下行命令不在当前范围）。
 - 数据来源仅限 MQTT 服务器→自定义客户端消息与本地图传解码结果。
 
 ## 面板 → 数据源 → 频率 → 降级
@@ -75,7 +77,7 @@
 
 ## 布局
 
-总控台页为单页网格，自上而下：
+总控模式页为单页网格，自上而下：
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -97,8 +99,8 @@
 # 编译 + 核心测试（含坐标换算与时间线推导）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -Package
 
-# 总控台专项：点位、时间线、复活、分析与图传预览，会占用 3333 / 3334
+# 单兵模式 + 总控模式专项：信息叠加、点位、时间线、复活、分析与图传预览，会占用 3333 / 3334
 .\.venv\Scripts\python.exe -X utf8 tools\check_console.py
 ```
 
-`--ui-checks` 会切到总控台逐项断言面板可见性与内容，并保存 `build/console-console.png`、`build/console-console-minimap.png`、`build/console-console-compact.png`（1024×720 紧凑布局）；`--metrics` 额外输出 `console_*` 证据字段（时间线条数、点位数量、位置与雷达更新次数、各域时效、分析摘要、图传预览是否有帧）。
+`--ui-checks` 会依次切到总控模式与单兵模式逐项断言面板可见性、内容与交互，并保存 `build/console-console.png`、`build/console-console-minimap.png`、`build/console-console-compact.png`（1024×720 紧凑布局）与单兵模式各状态证据；`--metrics` 额外输出 `console_*` 证据字段（时间线条数、点位数量、位置与雷达更新次数、各域时效、分析摘要、图传预览是否有帧）与 `operator_*` 字段（信息叠加开关、队友面板行数、地图点位）。单兵模式自检的逐项口径见[单兵模式与总控模式说明](operator-mode.md#5-自检与证据)。

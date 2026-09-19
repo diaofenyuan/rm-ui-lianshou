@@ -1,6 +1,7 @@
 #include "console_page.h"
 #include "console_panel.h"
 #include <QGridLayout>
+#include <QSettings>
 #include <QVBoxLayout>
 
 namespace {
@@ -15,6 +16,7 @@ QWidget *hint(const QString &text) {
 
 ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), match(state) {
     setObjectName("consolePage");
+    setAccessibleName("总控模式：比分条、我方与敌方列表、中央战术地图与底部事件、分析、图传预览");
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(12);
@@ -28,6 +30,9 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     enemySummary = new QLabel;
     enemySummary->setProperty("role", "muted");
 
+    QSettings settings;
+    const bool mapVisible = settings.value("ui/console_map_visible", true).toBool();
+
     auto *grid = new QGridLayout;
     grid->setSpacing(12);
     layout->addLayout(grid, 1);
@@ -39,13 +44,13 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     minimap = new MinimapPanel(match);
     auto *source = new QLabel("点位：雷达 / 本机测速模块");
     source->setProperty("role", "muted");
-    auto *minimapPanel = new ConsolePanel("战术地图", minimap, source);
-    minimapPanel->setMinimumWidth(230);
+    mapPanel = new ConsolePanel("战术地图（M 键开关）", minimap, source);
+    mapPanel->setMinimumWidth(230);
     respawnPanel = new RespawnPanel(match);
     auto *respawn = new ConsolePanel("复活状态", respawnPanel);
     auto *center = new QVBoxLayout;
     center->setSpacing(12);
-    center->addWidget(minimapPanel, 1);
+    center->addWidget(mapPanel, 1);
     center->addWidget(respawn);
     grid->addLayout(center, 0, 1);
     grid->addWidget(allyPanel, 0, 0);
@@ -68,6 +73,7 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     grid->addWidget(events, 1, 0);
     grid->addWidget(analysis, 1, 1);
     grid->addWidget(video, 1, 2);
+    mapPanel->setVisible(mapVisible);
 
     grid->setColumnStretch(0, 5);
     grid->setColumnStretch(1, 6);
@@ -92,6 +98,15 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     ticker.start();
     refresh();
 }
+
+void ConsolePage::setMapVisible(bool visible) {
+    mapPanel->setVisible(visible);
+    if (visible) mapPanel->raise();
+    QSettings settings;
+    settings.setValue("ui/console_map_visible", visible);
+}
+void ConsolePage::toggleMap() { setMapVisible(!mapPanel->isVisible()); }
+bool ConsolePage::mapVisible() const { return mapPanel->isVisible(); }
 
 void ConsolePage::setRobot(int id) {
     bar->setAllyBlue(id > 100);

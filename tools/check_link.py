@@ -60,7 +60,9 @@ def check():
         assert code == 0, metrics
         assert metrics["ui_checks_passed"] and metrics["decoded_frames"] > 30
         assert metrics["robot_id"] == metrics["selected_robot_id"] == 104
-        # 总控台在断线重连后仍应有雷达点位与时间线内容（详细校验见 check_console.py）。
+        # 单兵模式：信息叠加默认开启、队友面板固定 5 个协议槽位（1/2/3/4/7）。
+        assert metrics["operator_hud_enabled"] and metrics["operator_teammate_rows"] == 5, metrics
+        # 总控模式在断线重连后仍应有雷达点位与时间线内容（详细校验见 check_console.py）。
         assert metrics["console_markers"] > 0 and metrics["console_timeline"] > 0, metrics
         print(json.dumps({"plus1_messages":len(rows),"broker_restart_recovered":True,"reordered_packets":True,
                           "drop_every_frames":17,"plus2":metrics},ensure_ascii=False,indent=2))

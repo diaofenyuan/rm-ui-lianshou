@@ -35,6 +35,11 @@ target_include_directories(rm_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/gener
 target_compile_definitions(rm_core PUBLIC PAHO_MQTT_STATIC=1)
 target_link_libraries(rm_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network protobuf::libprotobuf paho-mqtt3a-static)
 add_executable(rm_client src/main.cpp src/window.cpp src/window.h resources.qrc
+  src/ui/operator_page.cpp src/ui/operator_page.h
+  src/ui/operator_hud.cpp src/ui/operator_hud.h
+  src/ui/video_stage.cpp src/ui/video_stage.h
+  src/ui/status_strip.cpp src/ui/status_strip.h
+  src/ui/teammate_panel.cpp src/ui/teammate_panel.h
   src/ui/console_page.cpp src/ui/console_page.h
   src/ui/score_bar.cpp src/ui/score_bar.h
   src/ui/minimap.cpp src/ui/minimap.h

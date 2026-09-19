@@ -6,7 +6,9 @@
 #include <QStandardPaths>
 
 int main(int argc,char **argv) {
-    QApplication app(argc,argv); app.setApplicationName("rm_client");
+    QApplication app(argc,argv);
+    app.setOrganizationName("RoboMaster");
+    app.setApplicationName("rm_client");
     QCommandLineParser p;p.addHelpOption();
     p.addOptions({{"connect","启动后连接当前配置"},{"robot-id","机器人编号：红方 1–9，蓝方 101–109","id","3"},{"ffmpeg","FFmpeg 可执行文件","path","ffmpeg"},
         {"smoke-seconds","运行指定秒数后检查接收状态并退出","seconds","0"},{"screenshot","保存程序窗口截图","path"},{"metrics","保存接收统计 JSON","path"},{"ui-checks","验证叠加、折叠面板、表单及全屏"},{"ui-evidence","界面检查截图的路径前缀，需同时使用 --ui-checks","prefix"}});

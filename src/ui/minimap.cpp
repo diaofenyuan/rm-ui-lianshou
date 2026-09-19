@@ -27,6 +27,12 @@ MinimapPanel::MinimapPanel(MatchState *state, QWidget *parent) : QWidget(parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
 
+void MinimapPanel::setHudMode(bool enabled) {
+    if (hud == enabled) return;
+    hud = enabled;
+    update();
+}
+
 void MinimapPanel::setOwnRobot(int id) {
     const int number = (id >= 1 && id <= 9) || (id >= 101 && id <= 109) ? id % 100 : 0;
     if (ownNumber == number && allyBlue == (id > 100)) return;
@@ -87,10 +93,21 @@ int MinimapPanel::markerCount() const { return markers().size(); }
 void MinimapPanel::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    const QColor ink = theme::text, muted = theme::muted;
+    // HUD 模式下叠在深色图传之上，改用深色半透明卡底与浅色文字；其余口径完全一致。
+    const QColor ink = hud ? theme::hud::text : theme::text;
+    const QColor muted = hud ? theme::hud::muted : theme::muted;
+    const QColor border = hud ? theme::hud::edge : QColor("#BDCBD5");
+    const QColor fieldFallback = hud ? QColor("#101B24") : QColor("#F4F8FA");
+    const int footerHeight = hud ? 14 : 16;
     const QRectF area = rect().adjusted(2, 2, -2, -2);
-    const QRectF footer(area.left(), area.bottom() - 16, area.width(), 16);
-    const QRectF field = maptf::fieldRect(QRectF(area.left(), area.top(), area.width(), area.height() - 18));
+    if (hud) {
+        p.setPen(QPen(border, 1));
+        p.setBrush(theme::hud::card);
+        p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
+    }
+    const QRectF footer(area.left(), area.bottom() - footerHeight, area.width(), footerHeight);
+    const QRectF field = maptf::fieldRect(QRectF(area.left(), area.top(),
+        area.width(), area.height() - footerHeight - 2));
 
     // 底图：按控件尺寸缓存缩放结果，蓝方视角预先旋转 180°。
     if (bitmap.isNull()) bitmap = loadFieldMap();
@@ -109,14 +126,15 @@ void MinimapPanel::paintEvent(QPaintEvent *) {
     clip.addRoundedRect(field, 6, 6);
     p.save();
     p.setClipPath(clip);
-    if (rendered.isNull()) p.fillRect(field, QColor("#F4F8FA"));
+    if (rendered.isNull()) p.fillRect(field, fieldFallback);
     else p.drawPixmap(field.topLeft(), rendered);
-    // 过期时压低底图对比度，突出"当前没有实时位置"。
+    // 过期时压低底图对比度，突出"当前没有实时位置"；HUD 模式改用压暗而不是提亮。
     const bool positionStale = match->isStale(MatchState::Domain::Position);
     const bool radarStale = match->isStale(MatchState::Domain::Radar);
-    if (hasAnyData() && positionStale && radarStale) p.fillRect(field, QColor(255, 255, 255, 130));
+    if (hasAnyData() && positionStale && radarStale)
+        p.fillRect(field, hud ? QColor(10, 18, 26, 140) : QColor(255, 255, 255, 130));
     p.restore();
-    p.setPen(QColor("#BDCBD5"));
+    p.setPen(border);
     p.setBrush(Qt::NoBrush);
     p.drawRoundedRect(field, 6, 6);
 
@@ -151,10 +169,12 @@ void MinimapPanel::paintEvent(QPaintEvent *) {
     if (!hasAnyData()) note = "等待位置数据";
     else if (positionStale && radarStale) note = "位置数据已过期 · 仅显示最后已知位置";
     else if (radarStale) note = "雷达数据过期 · 点位为最后已知位置";
-    else note = QString("点位 %1 · 官方场地底图").arg(list.size());
-    p.setFont(theme::font(10));
+    else note = hud ? QString("点位 %1").arg(list.size()) : QString("点位 %1 · 官方场地底图").arg(list.size());
+    p.setFont(theme::font(hud ? 9 : 10));
     p.setPen(muted);
-    p.drawText(footer, Qt::AlignLeft | Qt::AlignVCenter, note);
+    p.drawText(footer, Qt::AlignLeft | Qt::AlignVCenter,
+               p.fontMetrics().elidedText(note, Qt::ElideRight, int(footer.width() * 0.62)));
+    if (hud) return;   // HUD 模式下图传本身已标明视角，页脚不再重复占位
     p.setPen(ink);
     p.drawText(footer, Qt::AlignRight | Qt::AlignVCenter,
                QString("我方 %1 · 敌方 %2").arg(allyBlue ? "蓝方" : "红方", allyBlue ? "红方" : "蓝方"));

@@ -10,6 +10,31 @@ inline const QColor green{"#087F68"};
 inline const QColor red{"#BE3451"};
 inline const QColor blue{"#2469BC"};
 inline const QColor warning{"#956017"};
+// 窗口底色，与 stylesheet() 中 QWidget#root 的背景一致；自绘控件需要不透明重绘时用它打底。
+inline const QColor pageBackground{"#F5F7F9"};
+
+// 单兵模式 HUD 专用配色：HUD 直接叠在深色图传之上，必须自带宽底与浅色前景，
+// 不能复用上面的浅色主题（浅色主题仍供窗口其余部分与总控模式使用）。
+namespace hud {
+inline const QColor card{14, 24, 33, 208};        // 常规半透明卡底
+inline const QColor cardStrong{11, 19, 27, 232};  // 顶部信息条等需要压住画面的区域
+inline const QColor cardSoft{14, 24, 33, 168};    // 专注模式下略降不透明度
+inline const QColor edge{255, 255, 255, 40};      // 卡边框
+inline const QColor track{255, 255, 255, 46};     // 血条 / 热量条底槽
+inline const QColor text{"#EAF2F7"};
+inline const QColor muted{"#A6BAC7"};
+inline const QColor good{"#4ED2A8"};
+inline const QColor warn{"#F0C069"};
+inline const QColor bad{"#F2758D"};
+inline const QColor accent{"#7FC4FF"};
+inline const QColor paused{128, 82, 18, 150};      // 暂停态整条底
+inline const QColor settled{22, 62, 104, 168};     // 结算态整条底
+
+// HUD 元素尺寸随图传实际高度缩放：1080p 与 720p 窗口下保持同一套视觉比例。
+inline qreal scaleFor(int imageHeight) {
+    return qBound(0.62, imageHeight / 720.0, 2.0);
+}
+}
 
 inline QFont font(int pixels, bool bold = false, bool numeric = false) {
     QFont value(numeric ? "Consolas" : "Microsoft YaHei UI");
