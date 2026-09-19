@@ -14,7 +14,8 @@ QWidget *hint(const QString &text) {
 }
 }
 
-ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), match(state) {
+ConsolePage::ConsolePage(MatchState *state, RobotLinkPool *pool, QWidget *parent)
+    : QWidget(parent), match(state) {
     setObjectName("consolePage");
     setAccessibleName("总控模式：比分条、我方与敌方列表、中央战术地图与底部事件、分析、图传预览");
     auto *layout = new QVBoxLayout(this);
@@ -23,8 +24,9 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     bar = new ScoreBar(match);
     layout->addWidget(bar);
 
-    ally = new RobotListPanel(match, false);
+    fleet = new FleetPanel(match);
     enemy = new RobotListPanel(match, true);
+    linkPanel = new LinkPoolPanel(pool);
     allySummary = new QLabel;
     allySummary->setProperty("role", "muted");
     enemySummary = new QLabel;
@@ -37,7 +39,7 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     grid->setSpacing(12);
     layout->addLayout(grid, 1);
 
-    auto *allyPanel = new ConsolePanel("我方机器人", ally, allySummary);
+    auto *allyPanel = new ConsolePanel("我方全队（连接池）", fleet, allySummary);
     allyPanel->setMinimumWidth(200);
     auto *enemyPanel = new ConsolePanel("敌方机器人", enemy, enemySummary);
     enemyPanel->setMinimumWidth(200);
@@ -69,17 +71,30 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     auto *analysis = new ConsolePanel("数据分析", analysisPanel, analysisSummary);
     videoPanel = new VideoPreviewPanel;
     auto *video = new ConsolePanel("图传预览", videoPanel);
-    for (auto *panel : {events, analysis, video}) panel->setMinimumHeight(104);
+    linkSummary = new QLabel;
+    linkSummary->setProperty("role", "muted");
+    auto *links = new ConsolePanel("连接池状态", linkPanel, linkSummary);
+    for (auto *panel : {events, analysis}) panel->setMinimumHeight(104);
+    // 连接池需要完整显示 7 条链路；图传保留紧凑预览，避免底部布局把后几条链路裁掉。
+    links->setMinimumHeight(250);
+    video->setMinimumHeight(70);
+    video->setMaximumHeight(72);
     grid->addWidget(events, 1, 0);
-    grid->addWidget(analysis, 1, 1);
-    grid->addWidget(video, 1, 2);
+    auto *analysisVideo = new QVBoxLayout;
+    analysisVideo->setSpacing(12);
+    analysisVideo->addWidget(analysis, 1);
+    analysisVideo->addWidget(video, 0);
+    grid->addLayout(analysisVideo, 1, 1);
+    // 连接池独占右下格，保证 7 条链路不会被图传预览覆盖。
+    grid->addWidget(links, 1, 2);
     mapPanel->setVisible(mapVisible);
 
     grid->setColumnStretch(0, 5);
     grid->setColumnStretch(1, 6);
     grid->setColumnStretch(2, 5);
-    grid->setRowStretch(0, 5);
-    grid->setRowStretch(1, 2);
+    // 底部含 7 条链路状态，给它足够的垂直权重，避免与图传预览互相覆盖。
+    grid->setRowStretch(0, 3);
+    grid->setRowStretch(1, 4);
 
     const auto refreshNow = [this] { refresh(); };
     connect(match, &MatchState::gameChanged, this, refreshNow);
@@ -89,10 +104,12 @@ ConsolePage::ConsolePage(MatchState *state, QWidget *parent) : QWidget(parent), 
     connect(match, &MatchState::robotStaticChanged, this, refreshNow);
     connect(match, &MatchState::robotDynamicChanged, this, refreshNow);
     connect(match, &MatchState::robotModuleChanged, this, refreshNow);
+    connect(match, &MatchState::robotsChanged, this, refreshNow);
     connect(match, &MatchState::positionChanged, this, refreshNow);
     connect(match, &MatchState::radarChanged, this, refreshNow);
     connect(match, &MatchState::timelineChanged, this, refreshNow);
     connect(match, &MatchState::stateReset, this, refreshNow);
+    if (pool) connect(pool, &RobotLinkPool::linkChanged, this, refreshNow);
     ticker.setInterval(200);
     connect(&ticker, &QTimer::timeout, this, refreshNow);
     ticker.start();
@@ -111,18 +128,19 @@ bool ConsolePage::mapVisible() const { return mapPanel->isVisible(); }
 void ConsolePage::setRobot(int id) {
     bar->setAllyBlue(id > 100);
     analysisPanel->setAllyBlue(id > 100);
-    ally->setOwnRobot(id);
+    fleet->setOwnRobot(id);
     enemy->setOwnRobot(id);
     minimap->setOwnRobot(id);
     refresh();
 }
 
 void ConsolePage::refresh() {
-    allySummary->setText(ally->summaryText());
+    allySummary->setText(fleet->summaryText());
     enemySummary->setText(enemy->summaryText());
     analysisSummary->setText(analysisPanel->statusText());
+    linkSummary->setText(linkPanel->summaryText());
     bar->update();
-    ally->update();
+    fleet->update();
     enemy->update();
     minimap->update();
     respawnPanel->update();

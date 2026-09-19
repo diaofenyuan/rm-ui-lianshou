@@ -9,19 +9,21 @@
 - 总控模式只做**信息展示与提醒**，不向机器人或服务器发送任何命令（下行命令不在当前范围）。
 - 数据来源仅限 MQTT 服务器→自定义客户端消息与本地图传解码结果。
 - MQTT 链路由 `RobotLinkPool` 管理：主链路订阅全局域，附加链路只订阅 7 个单机域并按机器人编号写入
-  `MatchState::RobotSnapshot`；当前入口仍默认只启动主链路，默认全队编号配置属于后续总控批次。
+  `MatchState::RobotSnapshot`；当前入口默认启动所选阵营 1–7 号全队链路，总控页面由 `FleetPanel` 与
+  `LinkPoolPanel` 展示按编号汇聚的状态。
 
 ## 面板 → 数据源 → 频率 → 降级
 
 | 面板 | 控件 | 数据来源（topic） | 官方频率 | 缺失 / 过期时的表现 |
 |---|---|---|---|---|
 | 顶栏比分条 | `ScoreBar` | `GameStatus` | 5 Hz | 超过 1.5 秒标记过期；不推算倒计时，缺失字段显示"未提供" |
-| 我方机器人列表 | `RobotListPanel` | `GlobalUnitStatus`（血量槽位）、`RobotStaticStatus` / `RobotDynamicStatus` / `RobotModuleStatus`（本机） | 1 Hz / 10 Hz / 1 Hz | 超过 3 秒灰显；协议未提供除本机外的血量上限，不画比例条 |
+| 我方机器人列表 | `FleetPanel` | `GlobalUnitStatus`（血量槽位）+ 连接池按编号汇聚的 `RobotStaticStatus` / `RobotDynamicStatus` / `RobotModuleStatus` | 1 Hz / 10 Hz / 1 Hz | 区分未建链、已建链未收到和过期；缺失字段显示“—” |
 | 敌方机器人列表 | `RobotListPanel` | `GlobalUnitStatus`（对方槽位） | 1 Hz | 同上；数据过期只灰显，不隐藏行 |
 | 战术地图 | `MinimapPanel` | 官方场地底图（本地资源）、`RobotPosition`（本机位置与朝向）、`RadarInfoToClient`（双方槽位） | 1 Hz / 触发式 | 位置超过 3 秒：底图降对比度并标注"仅显示最后已知位置"；从未收到：显示"等待位置数据"，不画点 |
 | 复活状态 | `RespawnPanel` | `RobotRespawnStatus` | 1 Hz | 超过 3 秒显示"数据过期"；未复活时显示正常态 |
 | 战场事件 | `EventTimelinePanel` | `Event`、`PenaltyInfo`、`GlobalSpecialMechanism` + 本地推导 | 触发式 | 只追加已确认事件；重复消息不重复入队 |
 | 数据分析 | `AnalysisPanel` | `GlobalLogisticsStatus`、`GlobalUnitStatus`、`RobotInjuryStat` | 1 Hz | 缺失字段显示"未提供"，不做估算 |
+| 连接池状态 | `LinkPoolPanel` | `RobotLinkPool` 的 Client ID、topic 数、累计接收数、最近接收时间 | 链路事件 / 200 ms | 断链保留最后状态并标记离线，重连后恢复 |
 | 图传预览 | `VideoPreviewPanel` | 已解码主图传帧（本地） | 解码帧率 | 图传中断时显示最后一帧并标注"图传中断" |
 
 时效阈值沿用 `MatchState`：5 Hz 与 10 Hz 域 1.5 秒，1 Hz 域 3 秒。触发的 `Radar` / `Position` 域不参与自动过期判定，由面板按 3 秒自行判断。
@@ -89,7 +91,7 @@
 │          ├──────────────────────┤            │
 │          │ 复活状态              │            │
 ├──────────┼──────────────────────┼────────────┤
-│ 战场事件  │ 数据分析              │ 图传预览    │
+│ 战场事件  │ 数据分析 + 图传预览    │ 连接池状态  │
 └──────────┴──────────────────────┴────────────┘
 ```
 

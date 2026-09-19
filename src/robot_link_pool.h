@@ -11,6 +11,13 @@
 class RobotLinkPool : public QObject {
     Q_OBJECT
 public:
+    struct LinkStatus {
+        bool ready = false;
+        int subscribedTopics = 0;
+        quint64 receivedMessages = 0;
+        int reconnectCount = 0;
+        qint64 lastMessageAgeMs = -1;
+    };
     explicit RobotLinkPool(QObject *parent = nullptr);
     ~RobotLinkPool() override;
 
@@ -25,6 +32,7 @@ public:
     int lastQos() const;
     int subscribedTopicCount() const;
     bool linkReady(int robotId) const { return ready.value(robotId, false); }
+    LinkStatus linkStatus(int robotId) const;
 
 signals:
     // 兼容主窗口现有连接状态栏；只转发主链路状态。
@@ -49,6 +57,8 @@ signals:
 private:
     QHash<int, StatusReceiver *> links;
     QHash<int, bool> ready;
+    QHash<int, int> reconnectCounts;
+    QHash<int, qint64> lastMessageAt;
     QVector<int> configuredIds;
     QVector<int> pendingIds;
     QString hostName;
@@ -61,4 +71,5 @@ private:
     QHash<QString, qint64> recentEventAt;
     void startNext(quint64 expectedGeneration);
     void wire(int robotId, StatusReceiver *receiver);
+    void noteMessage(int robotId);
 };

@@ -36,6 +36,8 @@ target_compile_definitions(rm_core PUBLIC PAHO_MQTT_STATIC=1)
 target_link_libraries(rm_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network protobuf::libprotobuf paho-mqtt3a-static)
 add_executable(rm_client src/main.cpp src/window.cpp src/window.h resources.qrc
   src/ui/operator_page.cpp src/ui/operator_page.h
+  src/ui/fleet_panel.cpp src/ui/fleet_panel.h
+  src/ui/link_pool_panel.cpp src/ui/link_pool_panel.h
   src/ui/operator_hud.cpp src/ui/operator_hud.h
   src/ui/video_stage.cpp src/ui/video_stage.h
   src/ui/status_strip.cpp src/ui/status_strip.h

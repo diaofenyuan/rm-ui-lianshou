@@ -47,7 +47,7 @@ def check():
         assert code == 0, metrics
         assert metrics["ui_checks_passed"], metrics
         assert metrics["robot_id"] == metrics["selected_robot_id"] == 104, metrics
-        assert metrics["mqtt_link_count"] == 1 and metrics["mqtt_subscribed_topics"] == 14, metrics
+        assert metrics["mqtt_link_count"] == 7 and metrics["mqtt_subscribed_topics"] == 56, metrics
         # 单兵模式：信息叠加默认开启、队友面板固定 5 个协议槽位（1/2/3/4/7）。
         assert metrics["operator_hud_enabled"] and metrics["operator_teammate_rows"] == 5, metrics
         # 单兵模式右上地图与总控模式中央地图是同一控件、同一 MatchState，点位必须一致。

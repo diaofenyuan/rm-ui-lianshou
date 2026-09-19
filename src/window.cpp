@@ -114,7 +114,7 @@ MainWindow::MainWindow(QString ffmpeg) {
 
     auto *body = new QHBoxLayout; body->setSpacing(16); layout->addLayout(body, 1);
     pages = new QStackedWidget; body->addWidget(pages, 1);
-    consolePage = new ConsolePage(&match); pages->addWidget(consolePage);
+    consolePage = new ConsolePage(&match, &linkPool); pages->addWidget(consolePage);
     operatorPage = new OperatorPage(&match); pages->addWidget(operatorPage);
     // 接收统计仍由主窗口持有（内容与图传/接收计数耦合），但摆在单兵模式页面内部，
     // 这样专注模式隐藏它时不会连带影响总控模式。
@@ -523,7 +523,14 @@ void MainWindow::startConnection() {
     consolePage->setRobot(connectedRobotId);
     updateProfile(); addEvent("连接操作位：" + operatorPage->operatorName());
     stopButton->setEnabled(true); lastUpdate->setText("最近接收 —");
-    const bool mqttStarted = linkPool.start(host->text().trimmed(), mqttPort->value(), {connectedRobotId});
+    // 总控模式的全队单机域使用同一阵营的 1–7 号编号；把选中的操作位放在首位作为主链路。
+    QVector<int> fleetIds{connectedRobotId};
+    const int teamBase = connectedRobotId > 100 ? 100 : 0;
+    for (int number = 1; number <= 7; ++number) {
+        const int id = teamBase + number;
+        if (!fleetIds.contains(id)) fleetIds.append(id);
+    }
+    const bool mqttStarted = linkPool.start(host->text().trimmed(), mqttPort->value(), fleetIds);
     const bool videoStarted = video.start(bindIp->text().trimmed(), quint16(udpPort->value()), ffmpegPath->text().trimmed());
     if (!mqttStarted || !videoStarted) {
         // 任一链路无法创建时立即回滚，避免界面显示"已连接"但后台仍残留半条链路。
@@ -589,6 +596,8 @@ QJsonObject MainWindow::metrics() const {
         {"operator_focus_fullscreen", focusMode && isFullScreen()},
         // 总控模式证据：面板内容、数据域时效与累计接收计数，供 check_console.py 校验。
         {"console_timeline", double(match.timeline().size())}, {"console_markers", double(consolePage->map()->markerCount())},
+        {"console_fleet_rows", consolePage->fleetPanel()->rowCount()}, {"console_fleet_height", consolePage->fleetPanel()->height()},
+        {"console_link_rows", consolePage->linkPoolPanel()->rowCount()}, {"console_link_height", consolePage->linkPoolPanel()->height()},
         {"console_video_preview", consolePage->videoPreview()->hasFrame()},
         {"console_analysis", consolePage->analysis()->statusText()},
         {"console_respawn", consolePage->respawnState()->statusText()},
@@ -645,7 +654,8 @@ bool MainWindow::runUiChecks(const QString &evidencePrefix) {
         && consolePage->map()->isVisible() && consolePage->respawnState()->isVisible()
         && consolePage->events()->isVisible() && consolePage->analysis()->isVisible()
         && consolePage->videoPreview()->isVisible()
-        && consolePage->allyList()->rowCount() == 5 && consolePage->enemyList()->rowCount() == 5 && okay;
+        && consolePage->allyList()->rowCount() == 7 && consolePage->enemyList()->rowCount() == 5
+        && consolePage->linkPoolPanel()->rowCount() == 7 && okay;
     // 有数据时才要求面板出内容，便于在无模拟端时也能跑通自检。
     if (match.ageMs(MatchState::Domain::Radar) >= 0)
         okay = consolePage->map()->markerCount() > 0 && okay;

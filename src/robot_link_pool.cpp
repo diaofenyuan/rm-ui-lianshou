@@ -8,7 +8,7 @@ RobotLinkPool::~RobotLinkPool() { stop(); }
 void RobotLinkPool::stop() {
     ++generation;
     running = false;
-    pendingIds.clear(); pendingIndex = 0; recentEventAt.clear();
+    pendingIds.clear(); pendingIndex = 0; recentEventAt.clear(); lastMessageAt.clear(); reconnectCounts.clear();
     const auto current = links;
     links.clear(); ready.clear(); configuredIds.clear(); primaryId = 0;
     for (auto *receiver : current) {
@@ -24,7 +24,7 @@ bool RobotLinkPool::start(const QString &host, int port, const QVector<int> &rob
     if (robotIds.isEmpty()) return false;
     hostName = host; brokerPort = port; configuredIds = robotIds;
     primaryId = configuredIds.constFirst();
-    recentEventAt.clear(); clock.restart();
+    recentEventAt.clear(); lastMessageAt.clear(); reconnectCounts.clear(); clock.restart();
     pendingIds = configuredIds; pendingIndex = 0; running = true;
     const quint64 currentGeneration = ++generation;
     startNext(currentGeneration);
@@ -49,30 +49,41 @@ void RobotLinkPool::startNext(quint64 expectedGeneration) {
 
 void RobotLinkPool::wire(int id, StatusReceiver *receiver) {
     connect(receiver, &StatusReceiver::stateChanged, this,
-        [this, id, receiver](const QString &text, bool isReady) {
+        [this, id](const QString &text, bool isReady) {
+            if (!links.contains(id)) return;
             ready[id] = isReady;
-            const int topics = receiver ? receiver->subscribedTopicCount() : 0;
+            if (!isReady && (text.contains("失败") || text.contains("重试"))) ++reconnectCounts[id];
+            // 停止连接时旧 sender 的排队信号可能晚于 QObject 销毁到达；从池中查找，
+            // 不捕获已被 stop() 删除的 StatusReceiver 裸指针。
+            const auto *current = links.value(id);
+            const int topics = current ? current->subscribedTopicCount() : 0;
             emit linkChanged(id, isReady, text, topics);
             if (id == primaryId) emit stateChanged(text, isReady);
         });
     connect(receiver, &StatusReceiver::received, this, [this, id](const rm::GameStatus &value) {
+        noteMessage(id);
         if (id == primaryId) emit received(value);
     });
     connect(receiver, &StatusReceiver::receivedInfo, this,
         [this, id](const rm::GameStatus &value, int bytes, int qos) {
+            noteMessage(id);
             if (id == primaryId) emit receivedInfo(value, bytes, qos);
         });
     connect(receiver, &StatusReceiver::receivedUnitStatus, this, [this, id](const rm::GlobalUnitStatus &value) {
+        noteMessage(id);
         if (id == primaryId) emit receivedUnitStatus(value);
     });
     connect(receiver, &StatusReceiver::receivedLogistics, this, [this, id](const rm::GlobalLogisticsStatus &value) {
+        noteMessage(id);
         if (id == primaryId) emit receivedLogistics(value);
     });
     connect(receiver, &StatusReceiver::receivedSpecialMechanism, this,
         [this, id](const rm::GlobalSpecialMechanism &value) {
+            noteMessage(id);
             if (id == primaryId) emit receivedSpecialMechanism(value);
         });
     connect(receiver, &StatusReceiver::receivedEvent, this, [this, id](const rm::Event &value) {
+        noteMessage(id);
         if (id != primaryId) return;
         // QoS 1 允许 broker 重投；同一 (event_id,param) 在 1.5 秒窗口内只进入一次时间线。
         const QString key = QString::number(value.has_event_id() ? value.event_id() : 0)
@@ -87,23 +98,25 @@ void RobotLinkPool::wire(int id, StatusReceiver *receiver) {
         emit receivedEvent(value);
     });
     connect(receiver, &StatusReceiver::receivedInjury, this,
-        [this, id](const rm::RobotInjuryStat &value) { emit receivedInjury(id, value); });
+        [this, id](const rm::RobotInjuryStat &value) { noteMessage(id); emit receivedInjury(id, value); });
     connect(receiver, &StatusReceiver::receivedRespawn, this,
-        [this, id](const rm::RobotRespawnStatus &value) { emit receivedRespawn(id, value); });
+        [this, id](const rm::RobotRespawnStatus &value) { noteMessage(id); emit receivedRespawn(id, value); });
     connect(receiver, &StatusReceiver::receivedStatic, this,
-        [this, id](const rm::RobotStaticStatus &value) { emit receivedStatic(id, value); });
+        [this, id](const rm::RobotStaticStatus &value) { noteMessage(id); emit receivedStatic(id, value); });
     connect(receiver, &StatusReceiver::receivedDynamic, this,
-        [this, id](const rm::RobotDynamicStatus &value) { emit receivedDynamic(id, value); });
+        [this, id](const rm::RobotDynamicStatus &value) { noteMessage(id); emit receivedDynamic(id, value); });
     connect(receiver, &StatusReceiver::receivedModule, this,
-        [this, id](const rm::RobotModuleStatus &value) { emit receivedModule(id, value); });
+        [this, id](const rm::RobotModuleStatus &value) { noteMessage(id); emit receivedModule(id, value); });
     connect(receiver, &StatusReceiver::receivedPosition, this,
-        [this, id](const rm::RobotPosition &value) { emit receivedPosition(id, value); });
+        [this, id](const rm::RobotPosition &value) { noteMessage(id); emit receivedPosition(id, value); });
     connect(receiver, &StatusReceiver::receivedBuff, this,
-        [this, id](const rm::Buff &value) { emit receivedBuff(id, value); });
+        [this, id](const rm::Buff &value) { noteMessage(id); emit receivedBuff(id, value); });
     connect(receiver, &StatusReceiver::receivedPenalty, this, [this, id](const rm::PenaltyInfo &value) {
+        noteMessage(id);
         if (id == primaryId) emit receivedPenalty(value);
     });
     connect(receiver, &StatusReceiver::receivedRadar, this, [this, id](const rm::RadarInfoToClient &value) {
+        noteMessage(id);
         if (id == primaryId) emit receivedRadar(value);
     });
 }
@@ -130,4 +143,18 @@ int RobotLinkPool::subscribedTopicCount() const {
     int total = 0;
     for (const auto *receiver : links) if (receiver) total += receiver->subscribedTopicCount();
     return total;
+}
+
+void RobotLinkPool::noteMessage(int robotId) { lastMessageAt.insert(robotId, clock.elapsed()); }
+
+RobotLinkPool::LinkStatus RobotLinkPool::linkStatus(int robotId) const {
+    LinkStatus result;
+    result.ready = ready.value(robotId, false);
+    result.reconnectCount = reconnectCounts.value(robotId, 0);
+    if (const auto *receiver = links.value(robotId)) {
+        result.subscribedTopics = receiver->subscribedTopicCount();
+        result.receivedMessages = receiver->receivedMessages;
+    }
+    if (lastMessageAt.contains(robotId)) result.lastMessageAgeMs = clock.elapsed() - lastMessageAt.value(robotId);
+    return result;
 }
